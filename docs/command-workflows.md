@@ -1,6 +1,6 @@
 # Plan command workflows
 
-[Back to README](../README.md#-commands)
+[Back to README](../README.en.md#-commands)
 
 ## Start and choose tools
 
@@ -23,7 +23,7 @@ Select the needed orchestrator separately, and select every nested callee; neith
 Selected names awaiting metadata stay selected for first-request resolution.
 Reopen the selector to refresh newly registered tools.
 Active and ready workflows lock tools and settings; exit and start a new workflow to change the allowlist.
-See [Planning and implementation](../README.md#-planning-and-implementation) for the first-request policy boundary, completion, and same-session versus fresh-session handoff.
+See [Planning and implementation](../README.en.md#-planning-and-implementation) for the first-request policy boundary, completion, and same-session versus fresh-session handoff.
 
 ## Busy transitions and recovery
 
@@ -33,7 +33,7 @@ An ordinary follow-up or `/plan finalize` can still run while Plan mode is activ
 
 `show`, `save`, `export`, and `implement` require an applicable stored plan; `finalize` requires active Plan mode.
 Cancellation and failed implementation preflight leave the stored plan intact.
-For finalization retries, fresh-session recovery, and non-interactive limitations, see [Planning and implementation](../README.md#-planning-and-implementation).
+For finalization retries, fresh-session recovery, and non-interactive limitations, see [Planning and implementation](../README.en.md#-planning-and-implementation).
 
 ## Export Markdown
 

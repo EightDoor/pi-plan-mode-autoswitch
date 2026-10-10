@@ -1,6 +1,6 @@
 # Pi Plan Mode settings reference
 
-[Back to README](../README.md)
+[Back to README](../README.en.md)
 
 - [Default Plan policy tools](#default-plan-policy-tools)
 - [Enable inactive built-in search tools in Pi](#enable-inactive-built-in-search-tools-in-pi)

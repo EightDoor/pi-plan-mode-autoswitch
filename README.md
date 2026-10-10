@@ -1,42 +1,42 @@
-# 🧭 pi-plan-mode-autoswitch — Plan Before Pi Edits Code
+# 🧭 pi-plan-mode-autoswitch — Pi 改代码之前先出方案
+
+**语言：中文 | [English](./README.en.md)**
 
 [![npm](https://img.shields.io/npm/v/pi-plan-mode-autoswitch)](https://www.npmjs.com/package/pi-plan-mode-autoswitch) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-> **Fork notice**: This package is a standalone fork of [`@narumitw/pi-plan-mode`](https://www.npmjs.com/package/@narumitw/pi-plan-mode) v0.59.2 that adds an optional **automatic model switch at Plan boundaries**. All upstream behavior is preserved; the new feature is opt-in and lives behind three new settings: `autoSwitchModel`, `planModel`, and `normalModel`.
+> **Fork 说明**：本包是 [`@narumitw/pi-plan-mode`](https://www.npmjs.com/package/@narumitw/pi-plan-mode) v0.59.2 的独立 fork，新增了可选的 **Plan 边界自动切换模型** 功能。上游行为全部保留；新功能为可选开启，由三个新设置项控制：`autoSwitchModel`、`planModel` 和 `normalModel`。
 
-Use a Codex-like `/plan` mode to explore a codebase, resolve important questions, and approve an implementation-ready plan before Pi edits files.
+用类 Codex 的 `/plan` 模式探索代码库、澄清关键问题，并在 Pi 动手改文件之前批准一份可直接实施的方案。
 
-## ✨ Features
+## ✨ 功能
 
-- Starts and manages Plan mode through `/plan`, `/plan start`, or `/plan <prompt>`.
-- Blocks mutations, inactive helpers, and unsafe shell forms while keeping helper schemas stable.
-- Uses structured questions for important ambiguity and explicit completion for a decision-ready plan.
-- Reviews the complete plan before implementation, export, save, further planning, or discard.
-- Implements in the planning session or a fresh linked session with the approved plan.
-- Configures persistent or one-shot destination model and thinking choices for fresh implementation.
-- Optionally switches the session model when Plan mode starts or ends.
-- Restores Plan state and one saved plan across resume and compaction.
-- Configures the Plan tool allowlist, reviewed shell commands, user-trusted subcommands, export path, plan reinjection, shortcut, and thinking level.
-- Publishes statusline state and cooperates anonymously with Workflow Mutex Protocol v1 participants.
+- 通过 `/plan`、`/plan start` 或 `/plan <prompt>` 启动并管理 Plan 模式。
+- 阻断修改类工具、非激活辅助工具和不安全的 shell 形式，同时保持辅助工具 schema 稳定。
+- 用结构化问题澄清重要歧义，用显式完成动作产出可决策的方案。
+- 在实施、导出、保存、继续规划或丢弃之前，先审阅完整方案。
+- 在当前会话或全新的关联会话中，带着已批准的方案实施。
+- 为全新实施配置持久化或一次性的目标模型与思考深度选项。
+- 可选在 Plan 模式开始或结束时切换会话模型。
+- 跨 resume 与压缩恢复 Plan 状态和一份已保存方案。
+- 可配置 Plan 工具白名单、已审阅的 shell 命令、用户信任的子命令、导出路径、方案再注入、快捷键与思考深度。
+- 向状态栏发布状态，并以匿名方式与 Workflow Mutex Protocol v1 参与者协作。
 
-## 📦 Install
+## 📦 安装
 
-This release requires Pi 0.80.6 or newer.
-Native PowerShell tool support requires Pi 0.84.3 or newer on Windows; earlier Pi versions omit that optional tool and retain the existing Plan policy.
+本版本要求 Pi 0.80.6 或更新。
+Windows 上的原生 PowerShell 工具支持要求 Pi 0.84.3 或更新；更早的 Pi 版本会省略该可选项并沿用现有 Plan 策略。
 
 ```bash
 pi install npm:pi-plan-mode-autoswitch
 ```
 
-Try without installing permanently:
+不想永久安装，可先试用：
 
 ```bash
 pi -e npm:pi-plan-mode-autoswitch
 ```
 
-Build and try this package locally from the repository root:
-
-Build and try this package locally from the repository root:
+在仓库根目录本地构建并试用：
 
 ```bash
 npm install
@@ -44,327 +44,327 @@ npm run build
 pi -e .
 ```
 
-The package declares `dist/index.ts`, so build an unbuilt local checkout before Pi loads the package directory.
-Install only from sources you trust because Pi extensions run with Pi's permissions.
+本包声明了 `dist/index.ts`，因此本地未构建的检出要先构建，Pi 才能加载包目录。
+只从你信任的来源安装，因为 Pi 扩展会以 Pi 的权限运行。
 
-## 🚀 Quick start
+## 🚀 快速开始
 
-Run `/plan` to open the state-aware menu, then start Plan mode and ask the agent to inspect and design the change.
-Run `/plan <prompt>` when the first planning request is already known.
+运行 `/plan` 打开感知状态的菜单，然后启动 Plan 模式，让 agent 检查并设计这次改动。
+如果第一次规划请求已经明确，直接用 `/plan <prompt>`。
 
-## 🗺️ How it works
+## 🗺️ 工作原理
 
-Plan mode keeps exploration and implementation on opposite sides of an explicit review boundary:
+Plan 模式让探索与实施分处一道显式审阅边界两侧：
 
 ```mermaid
 flowchart LR
-    start["Start: /plan or /plan with a prompt"]
-    start --> explore["Explore safely: inspect and clarify"]
-    explore --> complete["Complete the plan with plan_mode_complete"]
-    complete --> review["Review the ready plan"]
-    review -->|Revise| explore
-    review -->|Implement here| current["Current session: planning context retained"]
-    review -->|Start fresh| fresh["Fresh session: approved plan transferred"]
-    review -->|Save| saved["Saved for later"]
-    review -->|Export| exported["Markdown file"]
+    start["开始：/plan 或带提示的 /plan"]
+    start --> explore["安全探索：检查并澄清"]
+    explore --> complete["用 plan_mode_complete 完成方案"]
+    complete --> review["审阅就绪方案"]
+    review -->|修改| explore
+    review -->|此处实施| current["当前会话：保留规划上下文"]
+    review -->|全新会话| fresh["全新会话：转移已批准方案"]
+    review -->|保存| saved["稍后使用"]
+    review -->|导出| exported["Markdown 文件"]
 ```
 
-During planning, the agent can inspect the project and ask material questions, but Plan mode blocks editing tools and unsafe shell forms. Implementation starts only after the plan is complete and you choose a handoff:
+规划期间，agent 可以检查项目并提出重要问题，但 Plan 模式会阻断编辑类工具和不安全的 shell 形式。只有方案完成、并且你选择交接方式之后，才开始实施：
 
 ```mermaid
 sequenceDiagram
     actor User
     participant Pi
-    participant Plan as Plan mode
-    participant Work as Implementation
+    participant Plan as Plan 模式
+    participant Work as 实施
 
-    User->>Pi: Start planning
-    Pi->>Plan: Apply the configured Plan tool policy
-    Plan->>User: Ask material questions when needed
-    User-->>Plan: Answer or refine the request
-    Plan->>Pi: Submit the complete plan
-    Pi-->>User: Show the ready-plan review
-    alt Implement here
-        Pi->>Work: Restore Normal mode in the current session
-    else Start fresh and implement
-        Pi->>Work: Create a fresh session with the approved plan
+    User->>Pi: 开始规划
+    Pi->>Plan: 应用已配置的 Plan 工具策略
+    Plan->>User: 必要时提出关键问题
+    User-->>Plan: 回答或细化需求
+    Plan->>Pi: 提交完整方案
+    Pi-->>User: 展示就绪方案审阅
+    alt 此处实施
+        Pi->>Work: 在当前会话恢复 Normal 模式
+    else 全新会话实施
+        Pi->>Work: 用已批准方案创建全新会话
     end
 ```
 
-## 💬 Commands
+## 💬 命令
 
-| Command | Purpose |
+| 命令 | 作用 |
 | --- | --- |
-| `/plan` | Start or manage planning, review a plan, or choose same-session or fresh-session implementation. |
-| `/plan start` | Enter Plan mode without sending a model message. |
-| `/plan <prompt>` | Start planning with a prompt, or send a follow-up while already active. |
-| `/plan tools` | Choose a session-specific tool policy, then start; cancellation changes nothing. |
-| `/plan show` | Display the stored plan without starting a model turn. |
-| `/plan finalize` | Ask the active planner to finish or ask one remaining material question. |
-| `/plan implement` | Implement a completed or saved plan in this session, without a selector. |
-| `/plan save` | Save a ready plan in this Pi session and leave Plan mode. |
-| `/plan settings` | Open the same Plan Settings screen available from the menus. |
-| `/plan export [path]` | Write a ready, saved, or active implementation plan to Markdown. |
-| `/plan exit` (alias: `off`) | Leave Plan mode and discard its ready plan, or clear a saved/active plan. |
+| `/plan` | 启动或管理规划、审阅方案，或选择同会话/新会话实施。 |
+| `/plan start` | 进入 Plan 模式，不发送模型消息。 |
+| `/plan <prompt>` | 用提示开始规划，或在已激活时发送后续请求。 |
+| `/plan tools` | 选择仅本会话生效的工具策略，然后启动；取消则不做任何更改。 |
+| `/plan show` | 显示已存储的方案，不启动模型回合。 |
+| `/plan finalize` | 要求当前规划者收尾，或提出最后一个关键问题。 |
+| `/plan implement` | 在本会话实施已完成或已保存的方案，不弹选择器。 |
+| `/plan save` | 在本 Pi 会话中保存就绪方案并退出 Plan 模式。 |
+| `/plan settings` | 打开与菜单中相同的 Plan 设置页。 |
+| `/plan export [path]` | 把就绪、已保存或进行中的实施方案写成 Markdown。 |
+| `/plan exit`（别名：`off`） | 退出 Plan 模式并丢弃其就绪方案，或清除已保存/进行中的方案。 |
 
-All routes support TUI and RPC.
-Print and JSON modes reject the menu, `tools`, and `settings`; stored-plan display and implementation have [additional mode restrictions](#-planning-and-implementation).
-Exact subcommand words select routes; other text is a planning prompt, so `/plan start a migration` sends a prompt rather than rejecting trailing text.
-There is no startup flag.
+所有路由同时支持 TUI 和 RPC。
+打印模式和 JSON 模式会拒绝菜单、`tools` 和 `settings`；已存储方案的显示与实施还有[额外的模式限制](#-规划与实施)。
+精确匹配子命令词会命中对应路由，其他文本都算规划提示，所以 `/plan start a migration` 会发送提示而不是拒绝尾部文本。
+没有启动参数。
 
-State-changing transitions require an idle run; tool selection is locked once planning starts.
-`show`, `save`, `export`, and `implement` require an applicable stored plan; `finalize` requires active Plan mode.
-Export defaults to the configured destination (`PLAN.md` when unset), never overwrites an existing target, and ends Plan mode only when exporting a ready plan.
-See [command workflows](./docs/command-workflows.md) for tool selection, busy-state recovery, path handling, and export cancellation, and [Security and privacy](#-security-and-privacy) before allowing custom tools.
+状态变更类转换需要空闲回合；规划一旦开始，工具选择即被锁定。
+`show`、`save`、`export` 和 `implement` 需要有适用的已存储方案；`finalize` 需要 Plan 模式处于激活状态。
+导出默认写到已配置的目标（未配置时为 `PLAN.md`），从不覆盖已存在的目标，且只有导出就绪方案时才会退出 Plan 模式。
+工具选择、忙态恢复、路径处理和导出取消见 [命令流程](./docs/command-workflows.md)；在允许自定义工具前请先阅读[安全与隐私](#-安全与隐私)。
 
-## 🔒 Security and privacy
+## 🔒 安全与隐私
 
-While Plan mode is active, the policy blocks built-in editing tools and instructs the agent not to edit files or implement the change.
-It should explore first and ask structured questions when a preference or tradeoff materially changes the plan.
-Configure persistent defaults or a one-workflow tool override before activation; active and ready workflows lock those controls.
+Plan 模式激活期间，策略会阻断内置编辑类工具，并要求 agent 不要编辑文件或实施改动。
+它应当先探索，当某个偏好或取舍会实质影响方案时，用结构化问题提问。
+请在激活之前配置持久化默认值或单次流程的工具覆盖；激活中与就绪状态会锁定这些控件。
 
-Plan mode registers `plan_mode_question` and `plan_mode_complete` during extension load and never changes their active status itself.
-Another active-tool policy may hide them, in which case Plan start or restore fails without widening that policy.
-By default, the Plan policy allows active safe built-ins such as `read`, limited `bash`, limited `powershell`, `grep`, `find`, and `ls`.
-The optional native `powershell` tool must be active when an automatic Plan policy starts, for example through Pi's Windows `defaultTools` setting, unless its name was explicitly retained for first-request resolution.
-Tools named `edit`, `write`, or `update_plan` and deselected tools are blocked at execution time even though active schemas remain visible.
-Tools outside the reviewed core policy—including native MCP tools, native orchestration, extensions, and custom tools—are denied by default; explicitly allow their names before starting only when you accept the risk.
-Server annotations such as `readOnlyHint` are unverified hints, not permission or a safety guarantee.
-For example, opt into `mcp__docs__read`, `mcp__firecrawl__firecrawl_scrape`, or `lsp_diagnostics` through `/plan tools` or `defaultPlanTools` before the next workflow.
+Plan 模式在扩展加载时注册 `plan_mode_question` 和 `plan_mode_complete`，且自身从不改变它们的激活状态。
+若另一个激活中工具策略隐藏了它们，Plan 的启动或恢复会失败，而不会放宽该策略。
+默认情况下，Plan 策略允许 `read`、受限 `bash`、受限 `powershell`、`grep`、`find`、`ls` 等安全的激活中内置工具。
+可选的原生 `powershell` 工具在自动 Plan 策略启动时必须处于激活状态（例如通过 Pi 的 Windows `defaultTools` 设置），除非其名称被显式保留用于首次请求解析。
+名为 `edit`、`write` 或 `update_plan` 的工具以及被取消勾选的工具，即使其 schema 仍然可见，也会在执行时被阻断。
+已审阅核心策略之外的工具——包括原生 MCP 工具、原生编排、扩展和自定义工具——默认被拒绝；只有在接受风险时才在启动前显式允许它们的名称。
+`readOnlyHint` 之类的 server 注解只是未经验证的提示，不等于许可或安全保障。
+例如，可通过 `/plan tools` 或 `defaultPlanTools` 在下一次流程前选择 `mcp__docs__read`、`mcp__firecrawl__firecrawl_scrape` 或 `lsp_diagnostics`。
 
-Direct and `model-only` tools must be active in Pi; `model-only` tools cannot be called by another tool.
-Registered `codemode` and `deferred` tools are selectable without direct activation and can run through Pi's nested tool pipeline.
-MCP `codemode-deferred` follows its public `deferred` exposure.
-Select an orchestrator such as `codemode` or `tool_search` separately when needed: allowing it does not authorize its callees, and selecting an MCP tool does not enable its orchestrator.
-Pi's `tool_search` may declare tools independently, but declaration does not admit unselected names to the frozen Plan policy.
-Every nested call remains individually gated, including editing and limited-shell restrictions.
-Hidden tools remain unavailable even when selected or listed as active; unsupported exposure and unavailable policy metadata fail closed.
-Registered but inactive direct tools, unregistered tools, blocked core tools, and unselected tools report distinct denial guidance.
-A tool admitted before later deactivation can be reactivated and reused in the current workflow without restarting.
-After they become visible, the Plan-only helpers remain visible in Normal mode, but their handlers and the `tool_call` policy reject calls unless Plan mode owns the active workflow.
+直接工具和 `model-only` 工具必须在 Pi 中激活；`model-only` 工具不能被其他工具调用。
+已注册的 `codemode` 和 `deferred` 工具无需直接激活即可选择，并可通过 Pi 的嵌套工具管线运行。
+MCP 的 `codemode-deferred` 遵循其公开的 `deferred` 暴露方式。
+需要时请单独选择 `codemode` 或 `tool_search` 之类的编排器：允许它并不授权其被调用方，选择某个 MCP 工具也不会启用它的编排器。
+Pi 的 `tool_search` 可以自行声明工具，但声明不会让未选择的名称进入冻结的 Plan 策略。
+每一次嵌套调用仍然单独受控，包括编辑和受限 shell 的限制。
+隐藏工具即使被选中或被列为激活也不可用；不支持的暴露方式和不可用的策略元数据都会按失败关闭处理。
+已注册但未激活的直接工具、未注册工具、被阻断的核心工具和未选择的工具会给出各自不同的拒绝说明。
+在后续被停用之前准入的工具，可以在当前流程中重新激活并复用，无需重启。
+在它们可见之后，Plan 专属辅助工具在 Normal 模式下仍可见，但除非 Plan 模式拥有当前活动流程，否则其处理器和 `tool_call` 策略会拒绝调用。
 
-Limited `bash` uses a fail-closed Bash policy, including when an extension overrides the canonical `bash` tool name.
-It accepts common inspection commands, read-only Git and npm queries, pipelines and command lists composed entirely of accepted commands, plus selected checks such as `npm test`, `npm run typecheck`, and `cargo test`.
-Case-insensitive `-i` is allowed for inspection commands such as `rg`, `grep`, and `git grep`. Commands where `-i` edits in place, including `sed`, stay blocked.
-It also accepts `hostname` without arguments and local Windows `tasklist` queries using reviewed display, filter, module, and service flags.
-Reviewed Git inspections may place `--no-pager` before the accepted subcommand.
-They may also place one or more complete `-C <path>` pairs before the accepted subcommand only when every path is `.` or the exact current Pi working directory.
-Other targets are rejected so `git -C` cannot introduce executable configuration, hooks, filters, signing programs, or lazy-fetch remotes from another repository.
-It rejects output/input redirects, shell expansion, substitutions, subshells, background jobs, incomplete or directory-changing `-C` pairs, other Git global options, Git config overrides, mutating flags, dependency changes, editors, and unknown commands.
+受限 `bash` 使用失败关闭的 Bash 策略，即使某个扩展覆盖了规范的 `bash` 工具名同样生效。
+它接受常见检查类命令、只读 Git 与 npm 查询、完全由已接受命令组成的管道和命令列表，以及 `npm test`、`npm run typecheck`、`cargo test` 等选定检查。
+对 `rg`、`grep`、`git grep` 这类检查命令允许大小写不敏感的 `-i`；而 `-i` 表示原地编辑的命令（例如 `sed`）仍被阻断。
+它也接受不带参数的 `hostname`，以及使用已审阅显示、过滤、模块和服务参数的本地 Windows `tasklist` 查询。
+已审阅的 Git 检查可以把 `--no-pager` 放在被接受的子命令之前。
+它也可以在被接受的子命令前放置一个或多个完整的 `-C <path>` 参数对，但前提是每个路径都是 `.` 或当前 Pi 工作目录本身。
+其他目标会被拒绝，以防止 `git -C` 引入另一个仓库的可执行配置、钩子、过滤器、签名程序或惰性拉取远端。
+它会拒绝输出/输入重定向、shell 展开、命令替换、子 shell、后台任务、不完整或会切换目录的 `-C` 参数对、其他 Git 全局选项、Git config 覆盖、修改类标志、依赖变更、编辑器和未知命令。
 
-Limited `powershell` uses a separate fail-closed PowerShell policy, including when an extension overrides the canonical `powershell` tool name.
-It accepts canonical inspection cmdlets such as `Get-ChildItem`, `Get-Content`, `Get-Item`, `Get-Location`, `Resolve-Path`, `Select-String`, `Test-Path`, `Measure-Object`, `Sort-Object`, `Format-List`, `Format-Table`, `Out-String`, and `Write-Output`.
-It accepts local `Get-Process` and `Get-Service` queries with reviewed static selectors while rejecting remote and object-input parameters.
-It also accepts the same reviewed `git` and configured `gh` queries as limited Bash, including pipelines and semicolon-delimited command lists composed entirely of accepted commands.
-It rejects redirects, variables, substitutions, script blocks, call operators, type or method expressions, stop-parsing tokens, multiline input, non-ASCII quotation delimiters, aliases, mutating cmdlets, and unknown commands.
-Use canonical cmdlet names because PowerShell aliases are intentionally outside the reviewed policy.
+受限 `powershell` 使用独立的失败关闭 PowerShell 策略，即使某个扩展覆盖了规范的 `powershell` 工具名同样生效。
+它接受 `Get-ChildItem`、`Get-Content`、`Get-Item`、`Get-Location`、`Resolve-Path`、`Select-String`、`Test-Path`、`Measure-Object`、`Sort-Object`、`Format-List`、`Format-Table`、`Out-String`、`Write-Output` 等规范检查类 cmdlet。
+它接受带已审阅静态选择器的本地 `Get-Process` 和 `Get-Service` 查询，同时拒绝远程参数和对象输入参数。
+它也接受与受限 Bash 相同的已审阅 `git` 和已配置的 `gh` 查询，包括完全由已接受命令组成的管道和分号分隔的命令列表。
+它会拒绝重定向、变量、命令替换、脚本块、调用操作符、类型或方法表达式、停止解析标记、多行输入、非 ASCII 引号、别名、修改类 cmdlet 和未知命令。
+请使用规范 cmdlet 名称，因为 PowerShell 别名被有意排除在已审阅策略之外。
 
-A rejected parsed command list or pipeline identifies its first blocked command segment; malformed or unsupported shell syntax reports the complete submitted input instead.
-Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted.
-Both limited-shell policies reduce risk but do not provide an OS sandbox or confidentiality boundary.
-A configured `safeSubcommands` match trusts only its parsed command segment and arguments; neighboring segments must pass their own policy, and parser-unsupported syntax remains blocked.
-Trusted commands can still mutate data or execute code with Pi's permissions; see [safe shell subcommands](./docs/settings.md#safe-shell-subcommands) for the trust boundary and migration guidance.
+被拒绝的已解析命令列表或管道会指明第一个被阻断的命令段；语法畸形或不受支持的 shell 语法则会回显完整提交内容。
+测试和构建仍可能写入被忽略的缓存或构建产物，也可能执行项目定义的钩子；只有在仓库可信时才启用或调用它们。
+两种受限 shell 策略都能降低风险，但不提供操作系统沙箱或保密边界。
+配置的 `safeSubcommands` 匹配只信任它自己解析出的命令段和参数；相邻命令段必须各自通过策略，解析器不支持的语法仍被阻断。
+受信任的命令依然可能以 Pi 的权限修改数据或执行代码；信任边界与迁移指引见 [safe shell 子命令](./docs/settings.md#safe-shell-subcommands)。
 
-## 🧭 Planning and implementation
+## 🧭 规划与实施
 
-`plan_mode_question` follows Codex's `request_user_input` pattern: the agent can ask 1-3 concise questions, each with meaningful options and a free-form Other path.
-In TUI mode, a single question shows its header as plain muted text, submits as soon as its preset or custom answer is confirmed, and does not show tabs, Review, or question-navigation controls.
-Add an optional note with `n` before confirming a single preset answer.
-With two or three questions, one question appears at a time with question tabs and a final Review tab.
-Use Tab, Shift+Tab, left, or right to visit any question or Review, including unanswered future questions.
-Use up and down to choose an option, Enter to record it and advance, or `n` to record the highlighted option and open its optional note editor.
-Press `n` again on an answered item to edit or clear its note.
-Revisit a question to replace its answer; changing the chosen option clears its prior note.
-Review lists every answer and note, blocks incomplete submission, and requires returning to a question to edit its answer or note.
-Custom answers and notes retain their raw submitted text in the tool result, while terminal rendering is sanitized.
-In TUI mode, a custom editor registered through Pi's `ctx.ui.setEditorComponent()` also handles answer and note editing in a separate instance, without changing the main prompt draft.
-While that editor is active, it controls Escape and submission keys; Ctrl+C still cancels the question.
-The editor's submitted value is retained, including any whitespace normalization it intentionally applies.
-Without a custom editor, existing editing and cancellation behavior is unchanged.
-The TUI rejects either field above 4,000 characters instead of truncating it.
-RPC keeps the existing sequential `select` and `editor` dialogs because Pi RPC cannot render custom TUI components.
-If you cancel or no interactive UI is available, the agent should ask a concise plain-text question or proceed only with a clearly stated low-risk assumption instead of prematurely producing a final plan.
+`plan_mode_question` 沿用 Codex 的 `request_user_input` 模式：agent 可以提出 1-3 个精炼问题，每题都有有意义的选项和自由输入的 Other 路径。
+在 TUI 模式下，单个问题会把标题显示为普通弱化文本，确认预设或自定义答案后立即提交，且不显示标签页、Review 或问题导航控件。
+提交单个预设答案前可用 `n` 补充一条可选备注。
+两个或三个问题时，一次显示一个问题，带问题标签页和最后的 Review 标签页。
+用 Tab、Shift+Tab、左、右访问任意问题或 Review，包括尚未回答的后续问题。
+用上、下选择选项，回车记录并前进，或按 `n` 记录高亮选项并打开其可选备注编辑器。
+在已回答的条目上再次按 `n` 可编辑或清除备注。
+重新访问某个问题可以替换其答案；更改所选选项会清除其原有备注。
+Review 会列出所有答案与备注，阻止不完整的提交，并要求回到该问题才能修改答案或备注。
+自定义答案与备注在工具结果中保留原始提交文本，而终端渲染会做净化处理。
+在 TUI 模式下，通过 Pi 的 `ctx.ui.setEditorComponent()` 注册的自定义编辑器也会在独立实例中处理答案和备注编辑，不改动主提示草稿。
+该编辑器激活期间由它接管 Escape 与提交键；Ctrl+C 仍然取消问题。
+编辑器提交的值会被保留，包括它有意进行的任何空白规范化。
+没有自定义编辑器时，既有的编辑与取消行为不变。
+TUI 会拒绝任一字段超过 4,000 字符的输入，而不是截断。
+RPC 保持既有的顺序 `select` 和 `editor` 对话框，因为 Pi RPC 无法渲染自定义 TUI 组件。
+如果你取消，或者没有可用的交互界面，agent 应当提出一个精炼的纯文本问题，或者只在明确说明低风险假设的前提下继续，而不是过早产出最终方案。
 
-Pi identifies tools by tool name.
-The pre-start selector stores accepted session policy names and shows each effective tool's source and availability from Pi metadata, including native built-in extension registrations.
-A selected name can run in Plan mode only when the effective tool is registered, available through its exposure, and permitted by policy at the workflow's first provider-bound context.
-The allowlist freezes at that boundary and restores without admitting new names after reload, resume, or tree navigation.
-A tool registered or first made available later waits for the next Plan workflow; an admitted callable tool later declared to the model keeps its existing admission.
-If an extension overrides a built-in tool with the same name, Pi exposes the effective tool for that name and the selector shows that source.
+Pi 按工具名识别工具。
+启动前的选择器会存储已接受的会话策略名，并从 Pi 元数据展示每个生效工具的来源与可用性，包括原生内置与扩展注册。
+已选名称只有在生效工具已注册、通过其暴露方式可用、并且在流程首次绑定提供商的上下文中被策略允许时，才能在 Plan 模式运行。
+白名单在该边界冻结，重载、恢复或树导航之后恢复时不接受新名称。
+之后才注册或首次可用的工具要等下一个 Plan 流程；已准入的可调用工具即使后续才向模型声明，也保留其既有准入。
+如果某个扩展用同名覆盖内置工具，Pi 会为该名暴露生效工具，选择器也会展示其来源。
 
-A complete Plan mode answer should appear only after the agent has resolved discoverable facts and high-impact user decisions.
-The agent must call `plan_mode_complete({ plan })` alone as its final action, passing the complete Markdown plan.
-The tool rejects empty or whitespace-only plans and plans longer than 50,000 JavaScript characters; it does not truncate.
-Its visible result contains the full plan, and versioned result details let the extension restore it safely from the active session branch.
+只有在 agent 已澄清可发现的事实和高影响的用户决策之后，才应当给出完整的 Plan 模式答复。
+agent 必须单独调用 `plan_mode_complete({ plan })` 作为最后动作，并传入完整的 Markdown 方案。
+该工具拒绝空或纯空白方案，以及超过 50,000 个 JavaScript 字符的方案；它不会截断。
+其可见结果包含完整方案，带版本的结果详情让扩展能从活动会话分支安全恢复它。
 
-`plan_mode_complete` uses Pi's `terminate: true` hint.
-Termination is best effort: if a model puts it in a parallel tool batch, Pi terminates the batch early only when every finalized sibling tool also terminates.
-The prompt therefore requires the completion call to be standalone and last.
-The extension deliberately does not infer completion from phrases such as “I will present the plan,” and ordinary research or clarification turns never trigger automatic retries.
-`/plan finalize` and its exact canonical finalization prompt are explicit recovery requests.
-If one of those requests ends normally without a valid structured question or completed plan, Plan mode waits for `agent_settled` and retries once with stronger tool guidance.
-A valid question, accepted completion, user cancellation, explicit exit, workflow supersession, reload, session replacement, or shutdown cancels the retry.
-A second prose-only failure leaves Plan mode active, warns in interactive modes, and requires another explicit `/plan finalize` request.
+`plan_mode_complete` 使用 Pi 的 `terminate: true` 提示。
+终止是尽力而为：如果模型把它放进并行工具批次，只有当所有已定稿的兄弟工具也终止时，Pi 才会提前终止该批次。
+因此提示要求完成调用必须独立且最后执行。
+扩展刻意不会从“我将呈现方案”这类措辞推断完成，普通的调研或澄清回合也绝不会触发自动重试。
+`/plan finalize` 及其精确规范的收尾提示是显式的恢复请求。
+如果其中某个请求正常结束但既没有有效结构化问题也没有完成方案，Plan 模式会等待 `agent_settled`，并用更强的工具指引重试一次。
+有效问题、被接受的完成、用户取消、显式退出、流程被取代、重载、会话替换或关闭都会取消这次重试。
+第二次仍只输出散文时，Plan 模式保持激活，在交互模式下告警，并需要再次显式调用 `/plan finalize`。
 
-Legacy sessions and models may still submit one non-empty `<proposed_plan>` block with tags on their own lines.
-That compatibility path remains accepted, but it is not the primary workflow.
-Empty, malformed, unclosed, or multiple legacy blocks keep Plan mode active and produce a warning.
+旧版会话和模型仍可能提交一个非空的 `<proposed_plan>` 代码块，标签各占一行。
+该兼容路径依然可用，但不是主要工作流。
+空的、畸形的、未闭合的或多个旧版代码块会让 Plan 模式保持激活并产生警告。
 
-After completion, `/plan` opens the ready actions when interactive UI is available.
-The same flat menu shows **Implement here** and **Start fresh and implement**, explains which conversation context each choice uses, and previews the selected **Plan reinjection** policy.
-**Implement here**—and the compatibility route `/plan implement`—appends the Normal contract, lifts the Plan runtime policy, captures the reinjection setting, and starts implementation in the current session with its complete planning conversation and tool calls.
-**Start fresh and implement** opens a settings page before replacement.
-Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
-Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
-One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
-The model and thinking rows start from the persistent **Fresh model** and **Fresh thinking** defaults; when either setting is omitted, they show the planning session's current value with **same as plan** and carry it into the fresh session independently.
-The fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
-Back navigation preserves this menu-local draft, while closing and reopening the menu restores both persistent defaults.
-If the configured model is outside the current scope or no longer available, the row reports the fallback and uses **same as plan** without deleting the stored preference.
-The saved-plan menu keeps its direct fresh-session action without optional rows and applies the same persistent defaults and fallback.
+完成之后，交互界面可用时 `/plan` 会打开就绪操作。
+同一个扁平菜单会展示 **此处实施** 和 **全新会话实施**，说明每个选择使用哪些对话上下文，并预览所选的 **方案再注入** 策略。
+**此处实施**（以及兼容路由 `/plan implement`）会追加 Normal 契约、解除 Plan 运行时策略、记录再注入设置，并带着完整的规划对话和工具调用在当前会话开始实施。
+**全新会话实施** 会在替换前打开一个设置页。
+其可搜索模型列表在配置了会话模型作用域时对该作用域做快照，否则使用 Pi 当前可用的模型，并展示每个提供商、模型 ID 和友好名称。
+Pi 0.80.6–0.82.1 不向扩展暴露会话模型作用域，因此这些版本上列表使用当前全部可用模型。
+一次性提供商和模型标识各限 512 字符；过长的自定义标识在替换源会话之前就会被拒绝。
+模型与思考深度两行以持久化的 **Fresh model** 和 **Fresh thinking** 默认值为起点；任一设置缺省时，它们显示规划会话的当前值并标注 **与规划相同**，且彼此独立地带入全新会话。
+固定的思考深度选项为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 和 `max`。
+返回上一级会保留该菜单内的草稿，而关闭再打开菜单则恢复两个持久化默认值。
+如果配置的模型不在当前作用域或已不可用，该行会报告回退并使用 **与规划相同**，但不删除已存偏好。
+已保存方案菜单保留其直接的新会话操作，不带可选项行，并应用同样的持久化默认值与回退。
 
-Starting from that settings page waits for the source session to become idle, re-resolves and authenticates an explicit model, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
-The destination consumes the one-shot choices before its first provider request, applies an explicit model first, and then applies explicit thinking.
-Concurrent prompts that arrive while those choices are being applied are queued as follow-ups behind the kickoff prompt.
-If durable consumption blocks the kickoff, the handoff reports a partial start and restores a conversation-history prompt to the editor instead of reporting success.
-Changing only the model keeps the planning thinking level; changing only the thinking level keeps the planning model.
-If Pi clamps an unsupported thinking level, the extension reports the effective level.
-If the chosen model disappears or loses authentication after source preflight, the destination reports the race, consumes the intent without retrying it later, and continues with its default model.
-The destination still loads its normal `AGENTS.md`, skills, project resources, and extensions.
-Choosing **Export plan…** asks for a destination, writes the plan, appends the Normal contract, restores inherited thinking, and leaves Plan mode without starting a model turn or changing active tools.
-Choosing **Save for later**—or running `/plan save`—instead stores one plan in the current Pi session before leaving Plan mode.
+从该设置页启动会等待源会话空闲，重新解析并认证显式模型，创建一个以持久化源为父级的新会话，并转移完全一致的已批准方案，而不复制规划消息、工具结果或压缩/分支摘要。
+目标会话在其首次提供商请求之前消费这些一次性选择：先应用显式模型，再应用显式思考深度。
+在应用这些选择期间到达的并发提示会被排为跟随 kickoff 提示的后续请求。
+如果持久化消费阻塞了 kickoff，交接会报告部分启动，并把对话历史提示恢复到编辑器，而不是报告成功。
+只改模型会保留规划的思考深度；只改思考深度会保留规划的模型。
+如果 Pi 钳制了不支持的思考深度，扩展会报告实际生效的等级。
+如果所选模型在源预检后消失或失去认证，目标会报告这一竞态、消费该意图而不在之后重试，并继续使用其默认模型。
+目标仍会加载其常规的 `AGENTS.md`、技能、项目资源和扩展。
+选择 **导出方案…** 会询问目标位置、写出方案、追加 Normal 契约、恢复继承的思考深度，并在不启动模型回合、不改变激活工具的情况下退出 Plan 模式。
+选择 **稍后保存**（或运行 `/plan save`）则在退出 Plan 前把一份方案存入当前 Pi 会话。
 
-When a resumed active Plan workflow completes before `/plan` has run in that resumed session, the automatic menu cannot obtain Pi's command-only session replacement capability; choosing fresh asks you to reopen `/plan`, where the same action is available.
-A successful fresh handoff does not delete or consume the source planning session.
-Resume it later to inspect or hand off the ready/saved plan again; this deliberate duplication is the recovery path if the destination work is abandoned.
-In-memory sessions create an unlinked fresh session because no parent file exists.
-Escape, Ctrl+C, menu disposal, source replacement/shutdown, model/auth failure, or cancellation by another extension before replacement leaves the source plan unchanged.
-Under **Off — conversation history only**, the destination receives the complete plan in its initial user prompt and does not persist active-plan state.
-When a one-shot runtime choice exists, only that temporary non-model state is persisted and it is removed before the first request.
-If that removal cannot be persisted, the request is not sent and can be retried after session persistence is available.
-If that kickoff fails, the complete request remains in the destination editor and the source remains resumable.
-Under either guaranteed-plan policy, the destination persists active-plan state before kickoff.
-If guaranteed-plan persistence fails, the complete request is placed in the destination editor and the source remains resumable.
-If a guaranteed-plan kickoff fails, the destination retains the active plan; send a message to continue, use `/plan exit` to clear it, or resume the parent planning session.
+当恢复后的活动 Plan 流程在该恢复会话中尚未运行过 `/plan` 就已完成时，自动菜单无法获得 Pi 仅命令式的会话替换能力；此时选择新会话会请你重新打开 `/plan`，那里有同样的操作。
+成功的新会话交接不会删除或消费源规划会话。
+之后恢复它可以再次检查或再次交接就绪/已保存方案；这种刻意的重复正是目标端工作被放弃时的恢复路径。
+内存会话会创建一个未链接的新会话，因为不存在父文件。
+Esc、Ctrl+C、菜单销毁、源替换/关闭、模型或认证失败，或替换前被其他扩展取消，都会保持源方案不变。
+在 **关闭 — 仅对话历史** 下，目标在其初始用户提示中收到完整方案，且不持久化活动方案状态。
+存在一次性运行时选择时，只持久化该临时非模型状态，并在首次请求前移除。
+如果该移除无法持久化，请求不会发出，待会话持久化可用后可重试。
+如果该 kickoff 失败，完整请求会留在目标编辑器中，源会话仍可恢复。
+在任一保障方案策略下，目标会在 kickoff 前持久化活动方案状态。
+如果保障方案的持久化失败，完整请求会放入目标编辑器，源会话仍可恢复。
+如果保障方案的 kickoff 失败，目标会保留活动方案：发消息继续、用 `/plan exit` 清除，或恢复父级规划会话。
 
-A saved plan appears as `plan saved` and remains available after reload, resume, branch-local fork, and compaction in that session.
-It does not expire automatically, cross into a new session, or participate in ordinary model context.
-Open `/plan` to Show, Implement here, Start fresh and implement, Export, open Settings, or Clear it; `/plan show`, `/plan implement`, `/plan export [path]`, and `/plan exit`/`off` retain their direct routes in TUI and RPC.
-Fresh implementation checks idle state, the selected model, and authentication before session replacement; Implement here keeps its established preflight behavior.
-Starting another workflow with `/plan start`, `/plan <prompt>`, or `/plan tools` is blocked until the saved plan is implemented or cleared, so the single saved slot is never silently overwritten.
-Resuming that session keeps the plan saved; open `/plan` to review, implement, export, or clear it.
-Cancellation or failed implementation preflight leaves it unchanged.
+已保存方案会显示为 `plan saved`，在该会话内跨重载、恢复、分支内 fork 和压缩都保持可用。
+它不会自动过期，不会进入新会话，也不参与普通的模型上下文。
+打开 `/plan` 可以显示、此处实施、全新会话实施、导出、打开设置或清除它；`/plan show`、`/plan implement`、`/plan export [path]`、`/plan exit`/`off` 在 TUI 和 RPC 中保留各自的直接路由。
+全新会话实施会在替换会话前检查空闲状态、所选模型和认证；此处实施保持其既有预检行为。
+在已保存方案被实施或清除之前，用 `/plan start`、`/plan <prompt>` 或 `/plan tools` 启动另一个流程会被阻断，因此这个唯一的保存槽位绝不会被静默覆盖。
+恢复该会话后方案仍保持保存状态；打开 `/plan` 即可审阅、实施、导出或清除。
+取消或实施预检失败不会改变它。
 
-Text print and JSON modes cannot display the bare `/plan` menu and reject that route before changing state; use `/plan start` for direct no-prompt activation or `/plan <prompt>` to start planning with a prompt.
-`/plan tools` also rejects before changing state because its staged selector requires TUI or RPC.
-These modes can export any stored plan with `/plan export [path]`, save a ready plan with `/plan save`, and clear it with `/plan exit` or `/plan off`.
-Successful export is observable through the created file; exporting a ready plan also leaves Plan mode, while saved and active implementation state remains unchanged.
-An existing target or missing plan fails the command without changing state.
-These modes reject saved-plan display and implementation before changing state because Pi provides neither printable custom-message output nor acknowledged extension-triggered turns; resume the session in TUI or RPC to show or implement it.
+纯文本打印和 JSON 模式无法显示裸 `/plan` 菜单，会在改变状态之前拒绝该路由；直接无提示激活请用 `/plan start`，带提示开始规划请用 `/plan <prompt>`。
+`/plan tools` 同样在改变状态前拒绝，因为其分阶段选择器需要 TUI 或 RPC。
+这些模式可以用 `/plan export [path]` 导出任意已存储方案，用 `/plan save` 保存就绪方案，用 `/plan exit` 或 `/plan off` 清除。
+导出成功可通过生成的文件观察到；导出就绪方案还会退出 Plan 模式，而已保存与实施中的状态保持不变。
+目标已存在或方案缺失会使命令失败且不改变状态。
+这些模式在改变状态前拒绝已保存方案的显示与实施，因为 Pi 既不提供可打印的自定义消息输出，也没有被确认的扩展触发回合；请在 TUI 或 RPC 中恢复会话以显示或实施它。
 
-Both implementation paths apply the current **Plan reinjection** policy in their destination.
-The default **Off — conversation history only** policy does not create active-plan state or inject a hidden plan context.
-Implement here sends `Implement the plan.` and leaves the accepted plan in ordinary planning history.
-Start fresh and implement, or implementing a saved plan here, puts the complete plan in one ordinary initial user prompt because no reliable planning conversation is present.
-Later model calls then rely on Pi's normal conversation history and compaction behavior.
-**Through first implementation run** guarantees the exact plan throughout that run, including retries, compaction retries, and queued continuation, then clears active-plan state at `agent_settled`.
-**Until manually cleared** guarantees the exact plan across later turns, resume, and manual or automatic compaction until `/plan exit` or supersession.
-The guaranteed policies avoid a duplicate context block while the original implementation handoff remains available and inject one hidden canonical copy after that handoff is compacted away.
-Reinjection can consume up to the existing 50,000-character plan limit in model context.
-Cleanup is bound to the matching implementation, so an older run settling cannot clear a newer handoff.
+两条实施路径都会在其目标中应用当前的 **方案再注入** 策略。
+默认的 **关闭 — 仅对话历史** 不创建活动方案状态，也不注入隐藏的方案上下文。
+此处实施会发送 `Implement the plan.`，并把已接受的方案留在普通规划历史中。
+全新会话实施，或在此处实施已保存方案，会把完整方案放进一个普通的初始用户提示，因为此时并不存在可靠的规划对话。
+之后的模型调用依赖 Pi 正常的对话历史和压缩行为。
+**贯穿首次实施运行** 会在该次运行期间保障完全一致的方案，包括重试、压缩重试和排队的续跑，然后在 `agent_settled` 时清除活动方案状态。
+**直到手动清除** 会在后续回合、恢复以及手动或自动压缩期间保障完全一致的方案，直到 `/plan exit` 或流程被取代。
+保障类策略在原始实施交接仍然可用时不产生重复上下文块，而在该交接被压缩掉之后注入一份隐藏的规范副本。
+再注入在模型上下文中最多占用既有的 50,000 字符方案上限。
+清理绑定到匹配的那次实施，因此更早的回合结束不会清除更新的交接。
 
-While a guaranteed plan is active, `/plan show` displays the accepted plan.
-Interactive `/plan` offers Show, Export plan…, Settings, Start a new plan, and Clear; `/plan exit` and `/plan off` are the direct clear routes.
-Settings changes never alter the policy already captured by an active guaranteed-plan implementation.
-Automatic first-run cleanup removes the active status and future injected context after the triggering implementation run has received the complete plan.
-Starting a new Plan-mode workflow or implementing a replacement plan supersedes an active guaranteed plan.
-The extension deliberately does not infer completion from assistant prose or agent settlement under **Until manually cleared**, so clear the active plan when it no longer applies.
-Under **Off — conversation history only**, implementation messages remain ordinary conversation history and there is no active plan for `/plan exit` to remove.
-Choosing Stay before implementation keeps the plan ready.
-Revision feedback starts another Plan-mode turn and clears the previous implementable plan until an updated completion arrives.
-For clarification-only follow-ups, the agent answers and resubmits the complete unchanged plan so it remains implementable.
-Before saving or implementation, exit/off discards the ready plan and removes its completion result from later non-Plan model context.
+保障方案激活期间，`/plan show` 显示已接受的方案。
+交互式 `/plan` 提供显示、导出方案…、设置、开始新方案和清除；`/plan exit` 和 `/plan off` 是直接的清除路由。
+设置更改绝不会改变活动的保障方案实施已捕获的策略。
+首次运行的自动清理会在触发实施已收到完整方案之后，移除活动状态和后续注入的上下文。
+启动新的 Plan 模式流程或实施方案的替代版本会取代活动的保障方案。
+在 **直到手动清除** 下，扩展刻意不会从助手散文或 agent 结束推断完成，因此方案不再适用时请手动清除活动方案。
+在 **关闭 — 仅对话历史** 下，实施消息保持为普通对话历史，也没有可供 `/plan exit` 移除的活动方案。
+在实施前选择“留下”会保持方案就绪。
+修改反馈会开启另一个 Plan 模式回合，并清除上一个可实施方案，直到收到更新后的完成。
+对于仅澄清的后续请求，agent 会回答并重新提交完全相同的完整方案，使其保持可实施。
+在保存或实施之前，exit/off 会丢弃就绪方案，并把它从后续非 Plan 模型上下文中的完成结果里移除。
 
-While Plan mode is enabled, the extension also publishes a compact status for Pi statuslines.
-With `@narumitw/pi-statusline`, this appears in the extension status area:
+Plan 模式启用期间，扩展还会向 Pi 状态栏发布一条紧凑状态。
+配合 `@narumitw/pi-statusline`，它会出现在扩展状态区：
 
-- `plan active`: Plan mode is enabled and still gathering context or drafting a plan.
-- `plan ready`: A completed plan is stored until you implement it, export it, save it, continue planning, or exit Plan mode.
-- `plan saved`: One completed plan is stored outside model context in the current session until you implement or clear it.
-- `plan implementing`: The exact accepted plan is guaranteed under **Through first implementation run** or **Until manually cleared**.
+- `plan active`：Plan 模式已启用，仍在收集上下文或起草方案。
+- `plan ready`：已完成的方案已存储，等待你实施、导出、保存、继续规划或退出 Plan 模式。
+- `plan saved`：一份已完成的方案存储在当前会话的模型上下文之外，等待你实施或清除。
+- `plan implementing`：已接受的完全一致方案在 **贯穿首次实施运行** 或 **直到手动清除** 下得到保障。
 
-You can also exit directly.
-Before implementation, direct exit discards the latest proposed plan; while a plan is saved, it clears that saved plan.
-During a guaranteed-plan implementation, it removes both the original implementation handoff and the extension's canonical active-plan block from later model calls; an earlier Pi-generated compaction summary may still describe prior work:
+你也可以直接退出。
+实施之前，直接退出会丢弃最新的候选方案；方案处于保存状态时，它会清除该已保存方案。
+在保障方案实施期间，它会从后续模型调用中移除原始实施交接和扩展的规范活动方案块；更早由 Pi 生成的压缩摘要仍可能描述此前的工作：
 
 ```text
 /plan exit
 ```
 
-## 🧱 Cache-stable mode transitions
+## 🧱 缓存稳定的模式转换
 
-Plan and Normal requests share one append-only conversation.
-The extension appends one hidden, model-visible, versioned Plan contract before the first Plan prompt and one Normal contract before the first post-Plan Normal or implementation prompt.
-Ordinary linear turns do not rewrite or duplicate these contracts.
-The Plan contract explains native-tool opt-in and per-call nested enforcement; this wording changes future Plan transitions without rewriting existing transition messages.
-**Implement here** retains the Plan dialogue, structured questions, tool calls, completion evidence, and `Implement the plan.` kickoff in order.
-**Start fresh and implement** is the isolation path and transfers only the approved plan plus the Normal contract to a linked session.
+Plan 和 Normal 请求共享同一份只追加的对话。
+扩展在第一个 Plan 提示前追加一条隐藏的、模型可见的、带版本的 Plan 契约，在其后的第一个 Normal 或实施提示前追加一条 Normal 契约。
+普通的线性回合不会重写或复制这些契约。
+Plan 契约解释原生工具的按需启用与逐调用嵌套强制；这段措辞只影响未来的 Plan 转换，不会重写已有的转换消息。
+**此处实施** 按顺序保留 Plan 对话、结构化问题、工具调用、完成证据和 `Implement the plan.` kickoff。
+**全新会话实施** 是隔离路径，只把已批准方案和 Normal 契约转移到一个关联会话。
 
-The `context` hook filters repeated legacy `plan-mode-context` artifacts but preserves current transition messages.
-If compaction removes the effective transition, the hook inserts one canonical fallback at a deterministic retained-history boundary.
-Repeated transforms leave that fallback in place instead of moving it to the newest turn.
-An inactive legacy state entry does not inject a Normal contract, so sessions that never entered Plan mode keep their ordinary context after resume or reload.
-Manual `/tree` navigation restores branch-owned Plan state and chooses the matching contract without navigating or adding a branch summary.
-Pi lists hidden transition messages in `/tree`; Plan mode rejects those internal targets, so select an adjacent conversation entry.
+`context` 钩子会过滤重复的旧版 `plan-mode-context` 产物，但保留当前的转换消息。
+如果压缩移除了生效的转换，钩子会在一个确定的保留历史边界插入一份规范兜底。
+重复的 transform 会保持该兜底原位，而不会把它移到最新回合。
+未激活的旧版状态条目不会注入 Normal 契约，因此从未进入 Plan 模式的会话在恢复或重载后保持其普通上下文。
+手动 `/tree` 导航会恢复分支持有的 Plan 状态并选择匹配的契约，既不导航也不添加分支摘要。
+Pi 会在 `/tree` 中列出隐藏的转换消息；Plan 模式会拒绝这些内部目标，请选择相邻的对话条目。
 
-Plan mode registers `plan_mode_question` and `plan_mode_complete` once and keeps their names and definitions stable across Normal, Plan, ready, implementation, and restored workflows.
-Visible helpers do not mean `/plan` is active, and their descriptions exclude ordinary planning, the `writing-plans` skill, roadmaps, checklists, and plan-file work.
-Only the latest active Plan contract authorizes the helpers; inactive or stale calls fail without accepting a plan or opening question UI.
-Plan mode does not widen a restrictive active-tool policy; start or restore fails when a required helper is unavailable.
-Stable schemas preserve a cache-eligible prefix but cannot guarantee a hit because provider serialization, cache lifetime, minimum prefix size, implementation details, and session affinity remain external.
+Plan 模式只注册一次 `plan_mode_question` 和 `plan_mode_complete`，并在 Normal、Plan、就绪、实施和恢复流程中保持其名称与定义稳定。
+辅助工具可见并不代表 `/plan` 已激活，它们的描述也不涵盖普通规划、`writing-plans` 技能、路线图、清单和计划文件工作。
+只有最新的活动 Plan 契约授权这两个辅助工具；未激活或过期的调用会失败，既不接受方案也不打开问题 UI。
+Plan 模式不会放宽受限的激活中工具策略；所需辅助工具不可用时，启动或恢复会失败。
+稳定的 schema 能保留可缓存的前缀，但无法保证命中，因为提供商序列化、缓存生命周期、最小前缀长度、实现细节和会话亲和性仍属外部因素。
 
-The default `thinkingLevel: "inherit"` avoids a Plan-specific reasoning-parameter change.
-A fixed Plan thinking level remains supported, but changing reasoning parameters can prevent provider-side state reuse even when prompts and tool schemas stay stable.
+默认的 `thinkingLevel: "inherit"` 避免了 Plan 专属的推理参数变更。
+固定 Plan 思考深度依然受支持，但修改推理参数可能阻止提供商侧的状态复用，即使提示和工具 schema 保持稳定。
 
-## 🤝 Workflow coexistence
+## 🤝 流程共存
 
-Plan mode is independently installable and keeps its standalone behavior when no other protocol participant is present.
-On the characterized Pi `0.84.2` runtime, it participates in the anonymous `workflow:mutex:v1` `agent-workflow` group.
-It holds the group while Planning is active, while a completed plan awaits review, and while revision is underway.
-Saved plans and ordinary implementation after Plan handoff do not hold the group.
+Plan 模式可独立安装，在没有其他协议参与者时保持其独立行为。
+在已表征的 Pi `0.84.2` 运行时上，它会参与匿名的 `workflow:mutex:v1` `agent-workflow` 组。
+规划激活期间、已就绪方案等待审阅期间、以及修改进行期间，它都持有该组。
+已保存方案以及 Plan 交接之后的普通实施不持有该组。
 
-Every inactive start performs one final synchronous admission after asynchronous preflight and before changing Plan state, persistence, prompts, tools, thinking level, queues, or status.
-If another participant is active, TUI and RPC show an anonymous warning that another workflow is active.
-Print and JSON direct routes throw the same anonymous error before mutation.
+每一次从非激活状态启动，都会在异步预检之后、且在改变 Plan 状态、持久化、提示、工具、思考深度、队列或状态之前，执行最后一次同步准入。
+如果另一个参与者处于激活状态，TUI 和 RPC 会显示匿名警告，提示有其他流程正在运行。
+打印模式和 JSON 的直接路由会在变更前抛出同样的匿名错误。
 
-Launch-menu, selected-tool, shortcut, active-implementation **Start a new plan**, and restored activation use the same admission boundary.
-A rejected selected-tool launch does not save its draft choices.
+启动菜单、已选工具、快捷键、实施中的 **开始新方案** 以及恢复激活都使用同一个准入边界。
+被拒绝的已选工具启动不会保存其草稿选择。
 
-Restored active Plan state acquires before restoring restrictive tools, thinking, status, or model hooks.
-If restoration is busy, Plan mode stays non-running, leaves persisted history and active tools untouched, and requires a later reload or explicit new start after the other workflow ends.
-Planning-session cancellation during a fresh implementation preflight keeps the source Plan and its ownership.
-Successful session replacement relies on source-session shutdown to clean up and release; the destination's ordinary active implementation does not acquire the Plan mutex.
+恢复的活动 Plan 状态会在恢复受限工具、思考深度、状态或模型钩子之前先获取锁。
+如果恢复时忙，Plan 模式保持未运行，不动持久化历史和激活工具，并要求在其他流程结束后稍后重载或显式重新启动。
+全新会话实施预检期间取消规划会话，会保留源 Plan 及其所有权。
+成功替换会话依赖源会话关闭来清理并释放；目标端的普通活动实施不获取 Plan 互斥锁。
 
-The coexistence guarantee is cooperative and applies only when every contender implements v1 on the characterized Pi runtime and shares its event bus and session-manager identity.
-A pre-v1, mixed-version, non-participating, forked, or otherwise uncharacterized counterpart remains unsupported for mutual exclusion.
-Plan mode does not identify, inspect, configure, start, stop, or depend on another extension.
-Guaranteed coexistence with Goal requires `@narumitw/pi-goal` `0.53.0` or newer and this package at `0.52.0` or newer on the characterized Pi `0.84.2` runtime.
+该共存保证是协作式的，仅在每个竞争者都实现 v1、运行在已表征的 Pi 运行时并共享同一事件总线与会话管理器标识时成立。
+v1 之前、混合版本、未参与、fork 或其他未表征的对端不支持互斥。
+Plan mode 不会识别、检查、配置、启动、停止或依赖其他扩展。
+与 Goal 的保证共存要求在已表征的 Pi `0.84.2` 运行时上，`@narumitw/pi-goal` `0.53.0` 或更新，且本包 `0.52.0` 或更新。
 
-| Installation | Support |
+| 安装组合 | 支持情况 |
 | --- | --- |
-| Plan mode without another workflow participant | Supported standalone behavior |
-| Plan mode `>=0.52.0` with Goal `>=0.53.0` on Pi `0.84.2` | Workflow Mutex v1 coexistence guarantee |
-| Either package below its floor, or another Pi runtime | Standalone behavior only; mutual exclusion unsupported |
+| Plan mode 且无其他流程参与者 | 独立行为受支持 |
+| Plan mode `>=0.52.0` 与 Goal `>=0.53.0`，Pi `0.84.2` | Workflow Mutex v1 共存保证 |
+| 任一包低于其下限，或使用其他 Pi 运行时 | 仅独立行为；不支持互斥 |
 
-## 🛠️ Tools
+## 🛠️ 工具
 
-- `plan_mode_question` asks up to three structured questions, supports optional answer notes, submits one answer directly, and reviews multiple answers before TUI submission.
-- `plan_mode_complete` records the complete approved Markdown plan and terminates the planning turn when called alone.
+- `plan_mode_question` 最多提出三个结构化问题，支持可选的答案备注，可直接提交单个答案，并在 TUI 提交前审阅多个答案。
+- `plan_mode_complete` 记录完整的已批准 Markdown 方案，并在单独调用时终止规划回合。
 
-## ⚙️ Settings
+## ⚙️ 设置
 
-Run `/plan settings`, open **Settings** from an inactive `/plan` menu, or edit `<getAgentDir()>/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`).
-The optional file is read at session start and watched for changes; only an explicit save creates it.
+运行 `/plan settings`，从非激活的 `/plan` 菜单打开 **设置**，或编辑 `<getAgentDir()>/pi-plan-mode.json`（通常是 `~/.pi/agent/pi-plan-mode.json`）。
+该可选文件在会话开始时读取并监听变更；只有显式保存才会创建它。
 
 ```json
 {
@@ -382,56 +382,58 @@ The optional file is read at session start and watched for changes; only an expl
 }
 ```
 
-By default, Plan mode inherits thinking, allows active safe built-ins, uses the planning model and thinking level for fresh implementation, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
-Model switching at Plan boundaries is off unless `autoSwitchModel` is enabled.
-The shortcut is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
-Until then, the current shortcut binding stays unchanged.
-Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.
-The export destination affects the next export immediately.
-Inactive built-in `grep`, `find`, and `ls` must be [enabled in Pi settings](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi); Plan policy only grants execution permission.
+默认情况下，Plan 模式继承思考深度，允许激活中的安全内置工具，全新会话实施使用规划所用的模型与思考深度，导出到 `PLAN.md`，并在实施开始后依赖普通对话历史。
+除非启用 `autoSwitchModel`，否则 Plan 边界的模型切换是关闭的。
+快捷键默认禁用；启用、修改或移除后需 `/reload` 或重启 Pi 才生效。
+在此之前，当前快捷键绑定保持不变。
+设置保存会作用于后续流程；激活中的实施保留其已捕获的再注入策略。
+导出目标会立即影响下一次导出。
+未激活的内置 `grep`、`find` 和 `ls` 必须[在 Pi 设置中启用](./docs/settings.md#enable-inactive-built-in-search-tools-in-pi)；Plan 策略只授予执行许可。
 
 > [!WARNING]
-> `safeSubcommands` is a JSON-only segment-scoped trust override, not a read-only allowlist.
-> It trusts a matching command and its arguments, not trailing commands or parser-unsupported syntax such as redirects.
-> Configure it only for commands and repositories you fully trust; trusted arguments can still cause mutation or code execution.
+> `safeSubcommands` 是仅 JSON、按命令段生效的信任覆盖，不是只读白名单。
+> 它信任匹配的命令及其参数，但不信任尾随命令或重定向等解析器不支持的语法。
+> 只为你完全信任的命令和仓库配置它；受信任的参数仍可能导致修改或代码执行。
 
-Saves are ordered within one Pi process, preserve unknown fields, and publish atomically; separate Pi processes can still race.
-Invalid settings remain untouched and make Settings read-only; session-start failures use safe defaults.
+保存在单个 Pi 进程内有序进行，会保留未知字段并原子发布；不同 Pi 进程之间仍可能竞争。
+无效设置不会被改动，并会让设置页变为只读；会话启动时的失败会使用安全默认值。
 
-Read the [settings reference](./docs/settings.md) for all accepted values, tool-policy resolution, reinjection choices, auto model switching, shortcut configuration, shell-override examples, and legacy-file migration.
+全部可接受取值、工具策略解析、再注入选择、自动模型切换、快捷键配置、shell 覆盖示例和旧文件迁移，见 [设置参考](./docs/settings.md)。
 
-## 🧠 Codex-like behavior
+## 🧠 类 Codex 行为
 
-This extension maps Codex's `ModeKind::Plan` behavior onto Pi's extension API:
+本扩展把 Codex 的 `ModeKind::Plan` 行为映射到 Pi 的扩展 API：
 
-- Plan mode is conversational collaboration, not TODO or progress tracking.
-- `/plan <prompt>` enters Plan mode before submitting the prompt.
-- The agent uses `plan_mode_question` for material preferences and completes with a standalone `plan_mode_complete` call instead of prose detection.
-- `update_plan` is blocked until the explicit implementation boundary restores Normal mode.
-- The default `clear-on-start` policy uses conversation history; `clear-after-first-run` and `keep` add exact-plan guarantees.
-- Append-only Plan and Normal contracts keep helper schemas stable, but Pi's tool policy is risk reduction rather than Codex sandbox enforcement.
+- Plan 模式是对话式协作，不是 TODO 或进度追踪。
+- `/plan <prompt>` 先进入 Plan 模式，再提交提示。
+- agent 用 `plan_mode_question` 处理重要偏好，并用独立的 `plan_mode_complete` 调用收尾，而不是靠散文判断。
+- `update_plan` 被阻断，直到显式的实施边界恢复 Normal 模式。
+- 默认的 `clear-on-start` 策略使用对话历史；`clear-after-first-run` 和 `keep` 增加完全一致方案的保障。
+- 只追加的 Plan 与 Normal 契约保持辅助工具 schema 稳定，但 Pi 的工具策略属于风险降低，而非 Codex 沙箱级强制。
 
-## 🗂️ Package layout
+## 🗂️ 包结构
 
 ```text
 .
-├── src/                               # Policy, questions, settings, and handoff modules
-│   ├── index.ts                       # Thin Pi entrypoint
-│   └── plan-mode.ts                   # Planning policy and implementation handoff
-├── dist/                              # Generated Jiti runtime
+├── src/                               # 策略、问题、设置与交接模块
+│   ├── index.ts                       # 精简的 Pi 入口
+│   └── plan-mode.ts                   # 规划策略与实施交接
+├── dist/                              # 生成的 Jiti 运行时
 ├── scripts/
-│   ├── build-runtime.mjs              # Runtime builder
-│   └── runtime-builder.mjs            # Shared esbuild split Jiti helper
-├── docs/                              # Published reference documentation
-└── test/                              # Behavior and lifecycle coverage
+│   ├── build-runtime.mjs              # 运行时构建器
+│   └── runtime-builder.mjs            # 共享的 esbuild 拆分 Jiti 辅助
+├── docs/                              # 发布的参考文档
+└── test/                              # 行为与生命周期覆盖
 ```
-The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
-## 🔎 Keywords
+生成的运行时由 `src/index.ts` 构建，不会反向导入 `src`。
+
+## 🔎 关键词
 
 Pi extension, Pi coding agent, plan mode, Codex-like plan mode, AI coding workflow, read-only planning, implementation plan, automatic model switching, autoswitch.
 
-## 📄 License
+## 📄 许可证
 
-MIT.
-See [`LICENSE`](./LICENSE).
+MIT。
+
+见 [`LICENSE`](./LICENSE)。
