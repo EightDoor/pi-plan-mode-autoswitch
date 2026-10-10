@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { createMockContext } from "../../../test/support.js";
 import { createPlanActionController } from "../src/plan-action-controller.js";
+import { createMockContext } from "./support.js";
 
 test("stale Plan actions do not load interactive UI", async () => {
   let interactiveLoads = 0;
@@ -142,11 +142,11 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
       getThinkingLevel: () => "medium",
       getSettings: () => ({
         thinkingLevel: "inherit",
-        defaultImplementationModel: {
+        autoSwitchModel: true,
+        normalModel: {
           provider: target.provider,
           modelId: target.id,
         },
-        defaultImplementationThinkingLevel: "high",
       }),
       implementationOutcome: () => "",
       getExportDestination: () => ({ configuredPath: "plan.md", resolvedPath: "/tmp/plan.md" }),
@@ -178,7 +178,7 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
         model: scenario.usesTarget
           ? { provider: target.provider, modelId: target.id }
           : { provider: "planning-provider", modelId: "planning-model" },
-        thinkingLevel: "high",
+        thinkingLevel: "medium",
       },
       scenario.name,
     );

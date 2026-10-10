@@ -32,6 +32,7 @@
     "check": "npm run build && biome check . && npm run typecheck",
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "prepack": "npm run build"
   },
   "peerDependencies": {
@@ -39,10 +40,12 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
     "@earendil-works/pi-coding-agent": "1.1.0",
     "@earendil-works/pi-tui": "1.1.0",
     "esbuild": "0.28.2",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "^5.0.3"
   },
   "repository": {
     "type": "git",

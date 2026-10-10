@@ -5,8 +5,8 @@ import { pathToFileURL } from "node:url";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import { listFiles, registerRuntimeBuilderContract } from "../../../test/runtime-builder-contract.js";
-import { builtinTool, createMockContext, extensionTool } from "../../../test/support.js";
+import { listFiles, registerRuntimeBuilderContract } from "./runtime-builder-contract.js";
+import { builtinTool, createMockContext, extensionTool } from "./support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({

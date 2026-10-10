@@ -11,13 +11,10 @@ import { retentionLabel } from "./implementation-retention.js";
 import { planExportDestination } from "./plan-export.js";
 import { PLAN_MODE_QUESTION_TOOL_NAME } from "./question-tool.js";
 import {
-  configuredImplementationModel,
   configuredImplementationPlanRetention,
-  configuredImplementationThinkingLevel,
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
   IMPLEMENTATION_PLAN_RETENTIONS,
-  IMPLEMENTATION_THINKING_LEVELS,
   normalizeKeyId,
   PLAN_MODE_THINKING_LEVELS,
   type PlanModeSettings,
@@ -52,16 +49,13 @@ export interface PlanModeSettingsMenuOptions {
   onSaved(settings: PlanModeSettings): void;
 }
 
-type Screen = "settings" | "tools" | "implementation-model" | "plan-model" | "normal-model" | "export" | "shortcut";
+type Screen = "settings" | "tools" | "plan-model" | "normal-model" | "export" | "shortcut";
 type Action =
   | "set-thinking"
   | "open-tools"
   | "toggle-tool"
   | "reset-tools"
   | "set-retention"
-  | "open-implementation-model"
-  | "set-implementation-model"
-  | "set-implementation-thinking"
   | "set-auto-switch"
   | "open-plan-model"
   | "set-plan-model"
@@ -142,21 +136,6 @@ export async function showPlanModeSettings(
                   action: "set-retention",
                 },
                 {
-                  id: "defaultImplementationModel",
-                  label: "Fresh model",
-                  description: "Choose the default model for a fresh implementation session.",
-                  currentValue: implementationModelValue(state.settings, implementationModels),
-                  action: "open-implementation-model",
-                },
-                {
-                  id: "defaultImplementationThinkingLevel",
-                  label: "Fresh thinking",
-                  description: "Choose the default thinking level for a fresh implementation session.",
-                  currentValue: configuredImplementationThinkingLevel(state.settings) ?? "same as plan",
-                  values: ["same as plan", ...IMPLEMENTATION_THINKING_LEVELS],
-                  action: "set-implementation-thinking",
-                },
-                {
                   id: "defaultPlanExportPath",
                   label: "Export destination",
                   description: "Set the destination used when an export omits its path.",
@@ -214,21 +193,6 @@ export async function showPlanModeSettings(
             action: "reset-tools",
           },
         ],
-        hint: "back",
-      }),
-      "implementation-model": ({ state }) => ({
-        kind: "choice",
-        title: "Fresh implementation model",
-        lines: ["Same as plan is the default and fallback when a configured model is unavailable."],
-        items: implementationModelItems(implementationModels, modelItemIds),
-        action: "set-implementation-model",
-        initialItemId: implementationModelItemId(
-          configuredImplementationModel(state.settings),
-          implementationModels,
-          modelItemIds,
-        ),
-        enableSearch: true,
-        viewportSize: 10,
         hint: "back",
       }),
       "plan-model": ({ state }) => ({
@@ -311,24 +275,6 @@ export async function showPlanModeSettings(
           `Plan reinjection: ${retentionLabel(implementationPlanRetention)}. Applies to the next Implement action.`,
         );
       },
-      "open-implementation-model": async () => ({
-        kind: "to",
-        screen: "implementation-model",
-      }),
-      "set-implementation-model": async ({ ctx: actionCtx, itemId, signal }) => {
-        const model = itemId ? modelsByItemId.get(itemId) : undefined;
-        if (itemId !== "same-as-plan" && !model) return { kind: "rejected" };
-        const defaultImplementationModel = model ? { provider: model.provider, modelId: model.id } : null;
-        const result = await savePatch(
-          actionCtx,
-          { defaultImplementationModel },
-          signal,
-          model
-            ? `Fresh implementation model: ${safeModelReference({ provider: model.provider, modelId: model.id })}.`
-            : "Fresh implementation model: same as plan.",
-        );
-        return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
-      },
       "set-auto-switch": async ({ ctx: actionCtx, value, signal }) => {
         if (value !== "true" && value !== "false") return { kind: "rejected" };
         return savePatch(actionCtx, { autoSwitchModel: value === "true" }, signal, `Auto model switch: ${value}.`);
@@ -362,27 +308,6 @@ export async function showPlanModeSettings(
             : "Plan exit model: off.",
         );
         return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
-      },
-      "set-implementation-thinking": async ({ ctx: actionCtx, value, signal }) => {
-        if (value === "same as plan") {
-          return savePatch(
-            actionCtx,
-            { defaultImplementationThinkingLevel: null },
-            signal,
-            "Fresh implementation thinking: same as plan.",
-          );
-        }
-        if (!IMPLEMENTATION_THINKING_LEVELS.includes(value as (typeof IMPLEMENTATION_THINKING_LEVELS)[number])) {
-          return { kind: "rejected" };
-        }
-        return savePatch(
-          actionCtx,
-          {
-            defaultImplementationThinkingLevel: value as PlanModeSettings["defaultImplementationThinkingLevel"],
-          },
-          signal,
-          `Fresh implementation thinking: ${value}.`,
-        );
       },
       "open-export": async () => ({ kind: "to", screen: "export" }),
       "set-export": async ({ ctx: actionCtx, value, signal }) => {
@@ -506,14 +431,6 @@ function invalidScreen(settingsPath: string, state: SettingsMenuState) {
 
 function retentionFromLabel(value: string | undefined) {
   return IMPLEMENTATION_PLAN_RETENTIONS.find((retention) => retentionLabel(retention) === value);
-}
-
-function implementationModelValue(settings: PlanModeSettings, models: readonly AvailableImplementationModel[]) {
-  const configured = configuredImplementationModel(settings);
-  if (!configured) return "same as plan";
-  return findAvailableImplementationModel(models, configured)
-    ? safeModelReference(configured)
-    : `same as plan · ${safeModelReference(configured)} unavailable`;
 }
 
 function implementationModelItems(

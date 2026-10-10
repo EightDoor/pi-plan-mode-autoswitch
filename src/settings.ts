@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
@@ -86,8 +86,6 @@ export interface PlanModeSettings {
   thinkingLevel: PlanModeThinkingLevel;
   defaultPlanTools?: string[];
   implementationPlanRetention?: ImplementationPlanRetention;
-  defaultImplementationModel?: ImplementationModelOverride;
-  defaultImplementationThinkingLevel?: PlanModeFixedThinkingLevel;
   autoSwitchModel?: boolean;
   planModel?: ImplementationModelOverride;
   normalModel?: ImplementationModelOverride;
@@ -99,8 +97,6 @@ export interface PlanModeSettingsPatch {
   thinkingLevel?: PlanModeThinkingLevel;
   defaultPlanTools?: readonly string[] | null;
   implementationPlanRetention?: ImplementationPlanRetention;
-  defaultImplementationModel?: ImplementationModelOverride | null;
-  defaultImplementationThinkingLevel?: PlanModeFixedThinkingLevel | null;
   autoSwitchModel?: boolean;
   planModel?: ImplementationModelOverride | null;
   normalModel?: ImplementationModelOverride | null;
@@ -154,18 +150,6 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
       return undefined;
     }
     settings.implementationPlanRetention = implementationPlanRetention as ImplementationPlanRetention;
-  }
-  if (Object.hasOwn(value, "defaultImplementationModel")) {
-    const defaultImplementationModel = normalizeImplementationModel(Reflect.get(value, "defaultImplementationModel"));
-    if (!defaultImplementationModel) return undefined;
-    settings.defaultImplementationModel = defaultImplementationModel;
-  }
-  if (Object.hasOwn(value, "defaultImplementationThinkingLevel")) {
-    const defaultImplementationThinkingLevel = Reflect.get(value, "defaultImplementationThinkingLevel");
-    if (!IMPLEMENTATION_THINKING_LEVELS.includes(defaultImplementationThinkingLevel as PlanModeFixedThinkingLevel)) {
-      return undefined;
-    }
-    settings.defaultImplementationThinkingLevel = defaultImplementationThinkingLevel as PlanModeFixedThinkingLevel;
   }
   if (Object.hasOwn(value, "autoSwitchModel")) {
     const autoSwitchModel = Reflect.get(value, "autoSwitchModel");
@@ -328,17 +312,6 @@ export function updatePlanModeSettings(
     if (patch.implementationPlanRetention !== undefined) {
       updated.implementationPlanRetention = patch.implementationPlanRetention;
     }
-    if (patch.defaultImplementationModel === null) delete updated.defaultImplementationModel;
-    else if (patch.defaultImplementationModel !== undefined) {
-      const model = normalizeImplementationModel(patch.defaultImplementationModel);
-      if (!model) throw invalidSettingsError(settingsPath, "invalid implementation model");
-      updated.defaultImplementationModel = model;
-    }
-    if (patch.defaultImplementationThinkingLevel === null) {
-      delete updated.defaultImplementationThinkingLevel;
-    } else if (patch.defaultImplementationThinkingLevel !== undefined) {
-      updated.defaultImplementationThinkingLevel = patch.defaultImplementationThinkingLevel;
-    }
     if (patch.autoSwitchModel !== undefined) updated.autoSwitchModel = patch.autoSwitchModel;
     if (patch.planModel === null) delete updated.planModel;
     else if (patch.planModel !== undefined) {
@@ -430,6 +403,9 @@ async function readSettingsSnapshot(settingsPath: string): Promise<SettingsSnaps
 }
 
 async function readSettingsContents(settingsPath: string): Promise<string> {
+  // Windows 没有 O_NOFOLLOW，先 lstat 拒绝符号链接，避免各平台读取语义不一致。
+  const linkStats = await lstat(settingsPath);
+  if (!linkStats.isFile()) throw new Error("settings path is not a regular file");
   const flags = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
   const handle = await open(settingsPath, flags);
   try {
@@ -521,16 +497,6 @@ export function configuredThinkingLevel(settings: PlanModeSettings): PlanModeFix
 
 export function configuredImplementationPlanRetention(settings: PlanModeSettings): ImplementationPlanRetention {
   return settings.implementationPlanRetention ?? "clear-on-start";
-}
-
-export function configuredImplementationModel(settings: PlanModeSettings): ImplementationModelOverride | undefined {
-  return settings.defaultImplementationModel;
-}
-
-export function configuredImplementationThinkingLevel(
-  settings: PlanModeSettings,
-): PlanModeFixedThinkingLevel | undefined {
-  return settings.defaultImplementationThinkingLevel;
 }
 
 export function configuredPlanExportPath(settings: PlanModeSettings) {

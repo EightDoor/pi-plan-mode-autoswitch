@@ -208,3 +208,6 @@ vite.config.ts.timestamp-*
 **/.pi-*-dist-*/
 docs/plans/archived/
 docs/roadmaps/archived/
+
+# Vitest cache
+.vitest/

@@ -1,0 +1,5 @@
+# Windows core.autocrlf 不得改写这些字节敏感文件（SHA-256 契约与文档代码块按 LF 计算）
+test/fixtures/** text eol=lf
+docs/** text eol=lf
+*.ts text eol=lf
+*.mjs text eol=lf

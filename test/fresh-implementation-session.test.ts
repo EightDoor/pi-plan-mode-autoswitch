@@ -255,17 +255,17 @@ test("saved plans can start fresh without consuming the source session state", a
     awaitingAction: false,
     savedPlan: { plan: PLAN, source: "plan_mode_complete" },
   });
-  const source = createMockPi({ activeTools: ["read", "edit"] });
+  const source = createMockPi({ activeTools: ["read", "edit"], thinkingLevel: "high" });
   planMode(source.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
       settings: {
         thinkingLevel: "inherit" as const,
-        defaultImplementationModel: {
+        autoSwitchModel: true as const,
+        normalModel: {
           provider: target.provider,
           modelId: target.id,
         },
-        defaultImplementationThinkingLevel: "high" as const,
       },
     }),
   });
@@ -356,6 +356,7 @@ test("saved plans can start fresh without consuming the source session state", a
     },
   });
   assert.deepEqual(destination.setModels, [target]);
+  // 目标会话 setModel 会重置等级，runtime 显式携带源会话 thinking 以保持继承。
   assert.equal(destination.thinkingLevel, "high");
   assert.equal(
     (destination.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)

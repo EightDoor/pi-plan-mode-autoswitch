@@ -135,7 +135,7 @@ test("saving a plan from Plan mode switches to the Plan exit model", async () =>
   ]);
 });
 
-test("implementing a saved plan outside Plan mode does not switch models", async () => {
+test("implementing a saved plan outside Plan mode switches to the Plan exit model", async () => {
   const { mock, context } = createHarness(autoSwitchSettings());
   await startSession(mock, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
@@ -145,7 +145,12 @@ test("implementing a saved plan outside Plan mode does not switch models", async
 
   await mock.commands.get("plan")?.handler("implement", context.ctx);
 
-  assert.equal(mock.setModels.length, 2);
+  // 已保存方案的实施也属于实施边界，统一切到 normalModel。
+  assert.equal(mock.setModels.length, 3);
+  assert.deepEqual(mock.setModels.at(-1), {
+    provider: NORMAL_MODEL.provider,
+    id: NORMAL_MODEL.modelId,
+  });
   assert.ok(mock.sentUserMessages.some((message) => message.text.length > 0));
 });
 

@@ -217,11 +217,12 @@ agent 必须单独调用 `plan_mode_complete({ plan })` 作为最后动作，并
 其可搜索模型列表在配置了会话模型作用域时对该作用域做快照，否则使用 Pi 当前可用的模型，并展示每个提供商、模型 ID 和友好名称。
 Pi 0.80.6–0.82.1 不向扩展暴露会话模型作用域，因此这些版本上列表使用当前全部可用模型。
 一次性提供商和模型标识各限 512 字符；过长的自定义标识在替换源会话之前就会被拒绝。
-模型与思考深度两行以持久化的 **Fresh model** 和 **Fresh thinking** 默认值为起点；任一设置缺省时，它们显示规划会话的当前值并标注 **与规划相同**，且彼此独立地带入全新会话。
+模型行以 **Plan exit model**（`normalModel`，仅在 `autoSwitchModel` 开启时生效）为起点；未配置或不可用时标注 **与规划相同** 并回退到当前会话模型。
+思考深度行始终以规划会话的当前等级为起点并标注 **与规划相同**，两者都是菜单内的一次性选择，不写回持久配置。
 固定的思考深度选项为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh` 和 `max`。
-返回上一级会保留该菜单内的草稿，而关闭再打开菜单则恢复两个持久化默认值。
+返回上一级会保留该菜单内的草稿，而关闭再打开菜单则恢复上述初始值。
 如果配置的模型不在当前作用域或已不可用，该行会报告回退并使用 **与规划相同**，但不删除已存偏好。
-已保存方案菜单保留其直接的新会话操作，不带可选项行，并应用同样的持久化默认值与回退。
+已保存方案菜单保留其直接的新会话操作，不带可选项行，并应用同样的初始值与回退。
 
 从该设置页启动会等待源会话空闲，重新解析并认证显式模型，创建一个以持久化源为父级的新会话，并转移完全一致的已批准方案，而不复制规划消息、工具结果或压缩/分支摘要。
 目标会话在其首次提供商请求之前消费这些一次性选择：先应用显式模型，再应用显式思考深度。
@@ -370,20 +371,15 @@ Plan mode 不会识别、检查、配置、启动、停止或依赖其他扩展�
 {
   "thinkingLevel": "inherit",
   "implementationPlanRetention": "clear-on-start",
-  "defaultImplementationModel": {
-    "provider": "anthropic",
-    "modelId": "claude-sonnet-4-5"
-  },
-  "defaultImplementationThinkingLevel": "high",
   "autoSwitchModel": true,
-  "planModel": { "provider": "anthropic", "modelId": "claude-opus-4-1" },
-  "normalModel": { "provider": "anthropic", "modelId": "claude-sonnet-4-5" },
+  "planModel": { "provider": "<plan-provider>", "modelId": "<plan-model>" },
+  "normalModel": { "provider": "<normal-provider>", "modelId": "<normal-model>" },
   "defaultPlanExportPath": "PLAN.md"
 }
 ```
 
-默认情况下，Plan 模式继承思考深度，允许激活中的安全内置工具，全新会话实施使用规划所用的模型与思考深度，导出到 `PLAN.md`，并在实施开始后依赖普通对话历史。
-除非启用 `autoSwitchModel`，否则 Plan 边界的模型切换是关闭的。
+默认情况下，Plan 模式继承思考深度，允许激活中的安全内置工具，导出到 `PLAN.md`，并在实施开始后依赖普通对话历史。
+模型完全由用户配置决定，扩展不内置任何实施模型默认值：启用 `autoSwitchModel` 后，进入/退出 Plan 以及任何实施入口（活动方案、已保存方案、此处实施、全新会话实施）都统一切到 `normalModel`，思考深度保持当前等级；未启用或未配置 `normalModel` 时不切换。
 快捷键默认禁用；启用、修改或移除后需 `/reload` 或重启 Pi 才生效。
 在此之前，当前快捷键绑定保持不变。
 设置保存会作用于后续流程；激活中的实施保留其已捕获的再注入策略。

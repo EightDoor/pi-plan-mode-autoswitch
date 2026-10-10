@@ -2,8 +2,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { findAvailableImplementationModel, snapshotAvailableImplementationModels } from "./implementation-models.js";
 import type { PlanExportDestination } from "./plan-export.js";
 import {
-  configuredImplementationModel,
-  configuredImplementationThinkingLevel,
+  configuredAutoSwitchModel,
+  configuredAutoSwitchModelTarget,
   type PlanModeFixedThinkingLevel,
   type PlanModeSettings,
 } from "./settings.js";
@@ -45,13 +45,12 @@ interface PlanActionControllerOptions {
 }
 
 export function createPlanActionController(options: PlanActionControllerOptions) {
+  // 实施阶段的默认模型统一取 autoSwitchModel 开启时的 normalModel；thinking 继承当前等级。
   const configuredDefaults = (): ImplementationRuntimeSelection => {
     const settings = options.getSettings();
-    const model = configuredImplementationModel(settings);
-    const thinkingLevel = configuredImplementationThinkingLevel(settings);
+    const model = configuredAutoSwitchModel(settings) ? configuredAutoSwitchModelTarget(settings, "normal") : undefined;
     return {
       ...(model ? { model: { ...model } } : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
     };
   };
   const effectiveDefaults = (ctx: ExtensionContext): ImplementationRuntimeSelection => {
@@ -61,11 +60,12 @@ export function createPlanActionController(options: PlanActionControllerOptions)
       configured.model,
     );
     if (configured.model && !availableModel) {
-      ctx.ui.notify("The configured fresh implementation model is unavailable; using the planning model.", "warning");
+      ctx.ui.notify("The configured Plan exit model is unavailable; using the current model.", "warning");
     }
-    const planModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined;
-    const model = availableModel ? { provider: availableModel.provider, modelId: availableModel.id } : planModel;
-    const thinkingLevel = configured.thinkingLevel ?? options.getThinkingLevel();
+    const currentModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined;
+    const model = availableModel ? { provider: availableModel.provider, modelId: availableModel.id } : currentModel;
+    // 目标会话 setModel 会重置思考等级，必须显式带上当前等级才能真正“继承”。
+    const thinkingLevel = options.getThinkingLevel();
     return {
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),

@@ -5,7 +5,7 @@
 - [Default Plan policy tools](#default-plan-policy-tools)
 - [Enable inactive built-in search tools in Pi](#enable-inactive-built-in-search-tools-in-pi)
 - [Plan reinjection](#plan-reinjection)
-- [Fresh implementation runtime](#fresh-implementation-runtime)
+- [Implementation model and thinking](#implementation-model-and-thinking)
 - [Auto model switch](#auto-model-switch)
 - [Export destination](#export-destination)
 - [Toggle shortcut](#toggle-shortcut)
@@ -14,7 +14,7 @@
 
 ## ⚙️ Settings
 
-Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, **Plan mode shortcut**, **Auto switch model**, **Plan enter model**, and **Plan exit model**.
+Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Export destination**, **Plan mode shortcut**, **Auto switch model**, **Plan enter model**, and **Plan exit model**.
 You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually.
 `safeSubcommands` is JSON-only.
 The optional file is read at session start, watched for changes, and created only by an explicit Settings save or manual edit.
@@ -24,19 +24,14 @@ The shortcut is disabled when `toggleShortcut` is omitted.
   "thinkingLevel": "inherit",
   "defaultPlanTools": ["read", "bash", "grep", "find", "ls"],
   "implementationPlanRetention": "clear-on-start",
-  "defaultImplementationModel": {
-    "provider": "anthropic",
-    "modelId": "claude-sonnet-4-5"
-  },
-  "defaultImplementationThinkingLevel": "high",
   "autoSwitchModel": false,
   "planModel": {
-    "provider": "anthropic",
-    "modelId": "claude-opus-4-1"
+    "provider": "<plan-provider>",
+    "modelId": "<plan-model>"
   },
   "normalModel": {
-    "provider": "anthropic",
-    "modelId": "claude-sonnet-4-5"
+    "provider": "<normal-provider>",
+    "modelId": "<normal-model>"
   },
   "defaultPlanExportPath": "PLAN.md",
   "safeSubcommands": {
@@ -147,36 +142,34 @@ Changing this setting applies to the next Implement action only.
 Each guaranteed-plan implementation stores its effective policy, so a later Settings save cannot shorten or extend an implementation already in progress.
 Conversation-history-only implementation has no active Plan-mode state to show, export, or clear after kickoff.
 
-### Fresh implementation runtime
+### Implementation model and thinking
 
-Omit `defaultImplementationModel` and `defaultImplementationThinkingLevel` to use **same as plan**, the default.
-A configured model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each.
-`defaultImplementationThinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use omission rather than `inherit` for **same as plan**.
-Choosing **Same as plan** in Settings removes the corresponding field.
+There are no built-in implementation model or thinking defaults; models come entirely from your configuration.
+`normalModel` (shown as **Plan exit model**) is the single implementation model: with `autoSwitchModel` enabled it is the starting model for every implementation entry point — implement here, fresh session, active plan, or saved plan — and it also seeds the ready-plan **Start fresh and implement** screen.
+Without `autoSwitchModel` or without `normalModel`, no switch happens and implementation keeps the current session model.
+A model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each.
 
 The model picker snapshots the current session's scoped models when a non-empty scope exists, otherwise Pi's currently available models.
-A configured model outside that catalogue remains stored but is ineffective for that handoff: Settings and the ready-plan fresh screen report that it is unavailable and fall back to the planning session model.
+A configured model outside that catalogue remains stored but is ineffective for that handoff: Settings and the ready-plan fresh screen report that it is unavailable and fall back to the current session model.
 The preference becomes effective again if the model returns to the applicable catalogue.
-This fallback also protects a persistent default that disappears while the ready-plan fresh screen is open.
+This fallback also protects a configured default that disappears while the ready-plan fresh screen is open.
 Authentication and one-shot model races still use the normal fresh-handoff preflight and recovery behavior.
 
-These persistent values seed each ready-plan **Start fresh and implement** screen, where either choice can be overridden once without changing Settings.
-The saved-plan direct fresh action applies the persistent values without an extra picker and warns when its configured model falls back.
-Changes save immediately and apply to later fresh implementation actions; an already open fresh-action screen keeps its own menu-local draft.
-They never switch the planning session's current model or thinking level.
+The fresh screen's choices are one-shot menu values: the model row starts from `normalModel`, the thinking row starts from the current thinking level, and neither choice is written back to Settings.
+The saved-plan direct fresh action applies the same initial values without an extra picker and warns when the configured model falls back.
+Both rows never switch the planning session's current model or thinking level while the menu is open.
 
 ### Auto model switch
 
 `autoSwitchModel` switches the session model at Plan-mode boundaries and is off by default.
-`planModel` is the target when Plan mode starts; `normalModel` is the target when Plan mode ends: Plan exit, plan save, or an implementation started from an active Plan session.
-Implementing a previously saved plan outside Plan mode is not a boundary and does not switch models.
-Each model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each, matching the `defaultImplementationModel` shape.
+`planModel` is the target when Plan mode starts; `normalModel` is the target when Plan mode ends: Plan exit, plan save, or any implementation start — including implementing a previously saved plan outside Plan mode.
+Each model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each.
 An omitted model leaves that direction unchanged, and a target that is already active is left untouched.
 
 The switch applies Pi's normal model-change behavior and then restores the current thinking level, so `thinkingLevel`, per-model thinking overrides, and manual thinking changes are unaffected.
 A target outside the current catalogue or without authentication keeps the current model and reports the fallback in a notification; the stored preference is not deleted.
 Switching completes inside the transition before any request that transition starts, so a first implementation request already uses the selected model.
-Fresh implementation sessions keep using their own **Fresh model** choice instead of these fields.
+Fresh implementation sessions use `normalModel` as their starting model, overridable once in the fresh menu.
 
 Changing these settings applies to later Plan transitions only.
 Invalid values invalidate the settings document like every other field; a settings read failure falls back to no switching.
@@ -260,7 +253,7 @@ A missing file stays absent until an explicit save.
 Invalid JSON, invalid values, oversized content, non-regular files, and read failures make Settings read-only; the existing bytes and previous effective settings remain.
 This in-process queue is not a cross-process lock, so concurrent separate Pi processes can still race.
 
-Invalid settings produce a warning and fall back to inherited Plan thinking, available safe-built-in tool defaults, `clear-on-start`, same-as-plan fresh runtime choices, and `PLAN.md`.
+Invalid settings produce a warning and fall back to inherited Plan thinking, available safe-built-in tool defaults, `clear-on-start`, no implementation-model switch, and `PLAN.md`.
 Compatibility: a valid legacy `plan-mode.json` remains readable with a warning and is never modified automatically.
 If Settings is explicitly saved while only that legacy file exists, the extension creates canonical `pi-plan-mode.json` from the complete legacy document, applies the selected change, preserves unknown fields, and leaves the legacy file untouched.
 If both files exist, the canonical filename takes precedence.

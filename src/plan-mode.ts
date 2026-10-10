@@ -1277,8 +1277,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     persistState();
     updateUi(ctx);
     const preImplementModel = ctx.model;
-    if (wasEnabled) await applyAutoModelSwitch("normal", ctx);
-
+    // 无论活动 Plan 还是 Plan 外已保存方案，进入实施都统一切到 normalModel（未启用时内部直接 no-op）。
+    await applyAutoModelSwitch("normal", ctx);
     const handoff = usesConversationHistory
       ? wasEnabled
         ? formatHistoryImplementationPrompt()
@@ -1292,13 +1292,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         restoreWorkflowToolPolicy(state.workflowToolPolicy);
         publishModeContract("plan", ctx);
         applyPlanThinkingLevel();
-        if (preImplementModel) {
-          // Restore the pre-implementation model instead of the configured enter model, which may be unset.
-          await applyAutoModelSwitch("plan", ctx, {
-            provider: preImplementModel.provider,
-            modelId: preImplementModel.id,
-          });
-        }
+      }
+      if (preImplementModel) {
+        // Restore the pre-implementation model instead of the configured enter model, which may be unset.
+        await applyAutoModelSwitch("plan", ctx, {
+          provider: preImplementModel.provider,
+          modelId: preImplementModel.id,
+        });
       }
       persistState();
       updateUi(ctx);

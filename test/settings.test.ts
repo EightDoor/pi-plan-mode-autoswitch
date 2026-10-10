@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { test } from "vitest";
 import {
   awaitPlanModeSettingsWrites,
-  configuredImplementationModel,
+  configuredAutoSwitchModel,
+  configuredAutoSwitchModelTarget,
   configuredImplementationPlanRetention,
-  configuredImplementationThinkingLevel,
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
   normalizePlanModeSettings,
@@ -138,53 +138,55 @@ test("Plan-mode settings validate implementation retention and export defaults",
   }
 });
 
-test("Plan-mode settings validate fresh implementation runtime defaults", () => {
-  const configured = normalizePlanModeSettings({
+test("Plan-mode settings ignore removed fresh implementation runtime fields", () => {
+  // 旧字段立即失效：既不进入有效设置对象，也不再因取值非法而让整份配置失效。
+  const legacy = normalizePlanModeSettings({
     defaultImplementationModel: { provider: "provider", modelId: "model" },
     defaultImplementationThinkingLevel: "high",
   });
-  assert.ok(configured);
-  assert.deepEqual(configuredImplementationModel(configured), {
-    provider: "provider",
-    modelId: "model",
+  assert.ok(legacy);
+  assert.equal(
+    Object.hasOwn(legacy, "defaultImplementationModel") || Object.hasOwn(legacy, "defaultImplementationThinkingLevel"),
+    false,
+  );
+  const legacyInvalid = normalizePlanModeSettings({
+    defaultImplementationModel: null,
+    defaultImplementationThinkingLevel: "extreme",
   });
-  assert.equal(configuredImplementationThinkingLevel(configured), "high");
-  const trimmed = normalizePlanModeSettings({
-    defaultImplementationModel: {
+  assert.ok(legacyInvalid);
+  assert.equal(Object.hasOwn(legacyInvalid, "defaultImplementationModel"), false);
+
+  // 实施模型统一来自 normalModel，且仅在 autoSwitchModel 开启时作为 fresh 默认。
+  const configured = normalizePlanModeSettings({
+    autoSwitchModel: true,
+    normalModel: {
       provider: "  provider  ",
       modelId: `  ${"m".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH)}  `,
     },
   });
-  assert.ok(trimmed);
-  assert.deepEqual(configuredImplementationModel(trimmed), {
+  assert.ok(configured);
+  assert.ok(configuredAutoSwitchModel(configured));
+  assert.deepEqual(configuredAutoSwitchModelTarget(configured, "normal"), {
     provider: "provider",
     modelId: "m".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH),
   });
 
   const defaults = normalizePlanModeSettings({});
   assert.ok(defaults);
-  assert.equal(configuredImplementationModel(defaults), undefined);
-  assert.equal(configuredImplementationThinkingLevel(defaults), undefined);
-
-  for (const defaultImplementationModel of [
+  assert.equal(configuredAutoSwitchModel(defaults), false);
+  assert.equal(configuredAutoSwitchModelTarget(defaults, "normal"), undefined);
+  for (const normalModel of [
     null,
     "provider/model",
     {},
     { provider: "", modelId: "model" },
     { provider: "provider", modelId: " " },
     { provider: "provider", modelId: "model", extra: true },
-    {
-      provider: "provider",
-      modelId: "x".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH + 1),
-    },
+    { provider: "provider", modelId: "x".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH + 1) },
   ]) {
-    assert.equal(normalizePlanModeSettings({ defaultImplementationModel }), undefined);
-  }
-  for (const defaultImplementationThinkingLevel of ["inherit", "extreme", null, 42]) {
-    assert.equal(normalizePlanModeSettings({ defaultImplementationThinkingLevel }), undefined);
+    assert.equal(normalizePlanModeSettings({ normalModel }), undefined);
   }
 });
-
 test("Plan-mode settings validate and patch auto model switch fields", async () => {
   const planModel = { provider: "openai-codex", modelId: "plan-model" };
   const normalModel = { provider: "xiaomi-token-plan-cn", modelId: "normal-model" };
@@ -319,8 +321,6 @@ test("Plan-mode settings patch implementation defaults, retention, and export fi
     await updatePlanModeSettings(
       {
         implementationPlanRetention: "clear-after-first-run",
-        defaultImplementationModel: { provider: "  provider  ", modelId: "  model  " },
-        defaultImplementationThinkingLevel: "high",
         defaultPlanExportPath: "docs/PLAN.md",
       },
       { settingsPath },
@@ -329,14 +329,10 @@ test("Plan-mode settings patch implementation defaults, retention, and export fi
       thinkingLevel: "low",
       future: { kept: true },
       implementationPlanRetention: "clear-after-first-run",
-      defaultImplementationModel: { provider: "provider", modelId: "model" },
-      defaultImplementationThinkingLevel: "high",
       defaultPlanExportPath: "docs/PLAN.md",
     });
     await updatePlanModeSettings(
       {
-        defaultImplementationModel: null,
-        defaultImplementationThinkingLevel: null,
         defaultPlanExportPath: null,
       },
       { settingsPath },

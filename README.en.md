@@ -219,11 +219,12 @@ The same flat menu shows **Implement here** and **Start fresh and implement**, e
 Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
 Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
 One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
-The model and thinking rows start from the persistent **Fresh model** and **Fresh thinking** defaults; when either setting is omitted, they show the planning session's current value with **same as plan** and carry it into the fresh session independently.
+The model row starts from the **Plan exit model** (`normalModel`, used only when `autoSwitchModel` is on); when it is unset or unavailable it shows **same as plan** and falls back to the current session model.
+The thinking row always starts from the planning session's current level with **same as plan**; both rows are one-shot menu choices and are never written back to persistent settings.
 The fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
-Back navigation preserves this menu-local draft, while closing and reopening the menu restores both persistent defaults.
+Back navigation preserves this menu-local draft, while closing and reopening the menu restores those initial values.
 If the configured model is outside the current scope or no longer available, the row reports the fallback and uses **same as plan** without deleting the stored preference.
-The saved-plan menu keeps its direct fresh-session action without optional rows and applies the same persistent defaults and fallback.
+The saved-plan menu keeps its direct fresh-session action without optional rows and applies the same initial values and fallback.
 
 Starting from that settings page waits for the source session to become idle, re-resolves and authenticates an explicit model, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
 The destination consumes the one-shot choices before its first provider request, applies an explicit model first, and then applies explicit thinking.
@@ -372,20 +373,15 @@ The optional file is read at session start and watched for changes; only an expl
 {
   "thinkingLevel": "inherit",
   "implementationPlanRetention": "clear-on-start",
-  "defaultImplementationModel": {
-    "provider": "anthropic",
-    "modelId": "claude-sonnet-4-5"
-  },
-  "defaultImplementationThinkingLevel": "high",
   "autoSwitchModel": true,
-  "planModel": { "provider": "anthropic", "modelId": "claude-opus-4-1" },
-  "normalModel": { "provider": "anthropic", "modelId": "claude-sonnet-4-5" },
+  "planModel": { "provider": "<plan-provider>", "modelId": "<plan-model>" },
+  "normalModel": { "provider": "<normal-provider>", "modelId": "<normal-model>" },
   "defaultPlanExportPath": "PLAN.md"
 }
 ```
 
-By default, Plan mode inherits thinking, allows active safe built-ins, uses the planning model and thinking level for fresh implementation, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
-Model switching at Plan boundaries is off unless `autoSwitchModel` is enabled.
+By default, Plan mode inherits thinking, allows active safe built-ins, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
+Models come entirely from user configuration; the extension ships no built-in implementation model default. With `autoSwitchModel` enabled, entering/leaving Plan mode and every implementation entry point (active plan, saved plan, implement here, fresh session) switches to `normalModel` and keeps the current thinking level; without `autoSwitchModel` or `normalModel`, nothing switches.
 The shortcut is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
 Until then, the current shortcut binding stays unchanged.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.

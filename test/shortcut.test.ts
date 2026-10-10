@@ -273,7 +273,8 @@ test("saving a shortcut in Plan Settings preserves registration until reload", a
     assert.ok(command);
     const running = command.handler("settings", f.runner.createCommandContext());
     await f.tui.waitForOpen();
-    for (let index = 0; index < 6; index += 1) f.tui.press("tui.select.down");
+    // 设置行列表移除 Fresh model / Fresh thinking 后，shortcut 行从索引 6 变为 4。
+    for (let index = 0; index < 4; index += 1) f.tui.press("tui.select.down");
     f.tui.press("tui.select.confirm");
     await f.tui.waitForPending();
     await f.tui.waitForOpen();
