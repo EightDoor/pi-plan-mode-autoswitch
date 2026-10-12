@@ -280,16 +280,27 @@ function createFreshImplementationFlow(
   const planModelSummary = ctx.model
     ? `${safeModelMetadata(ctx.model.id, "unknown model")} [${safeModelMetadata(ctx.model.provider, "unknown provider")}]`
     : undefined;
-  const configuredModel = implementationDefaults?.model;
-  const configuredAvailableModel = findAvailableImplementationModel(
-    models.map((choice) => choice.modelInfo),
-    configuredModel,
+  // 配置的有序候选链：界面高亮首个可用项，未手工改选时把整条链交给实施流程。
+  const configuredChain = [
+    ...(implementationDefaults?.model ? [implementationDefaults.model] : []),
+    ...(implementationDefaults?.fallbackModels ?? []),
+  ];
+  const availableModelInfos = models.map((choice) => choice.modelInfo);
+  const configuredAvailableIndex = configuredChain.findIndex((candidate) =>
+    findAvailableImplementationModel(availableModelInfos, candidate),
   );
-  let unavailableDefaultActive = configuredModel !== undefined && !configuredAvailableModel;
+  const configuredModel = configuredChain[0];
+  const configuredAvailableModel =
+    configuredAvailableIndex < 0
+      ? undefined
+      : findAvailableImplementationModel(availableModelInfos, configuredChain[configuredAvailableIndex]);
+  let unavailableDefaultActive = configuredChain.length > 0 && !configuredAvailableModel;
   let selectedModel = configuredAvailableModel
     ? models.find((choice) => choice.modelInfo === configuredAvailableModel)
     : undefined;
   let selectedModelUsesDefault = selectedModel !== undefined;
+  // 未手工改选时整条链按顺序交给实施流程：首个可用候选作主模型，其余作后备。
+  let selectedChain = configuredAvailableIndex < 0 ? [] : configuredChain.slice(configuredAvailableIndex);
   let selectedThinkingLevel = implementationDefaults?.thinkingLevel;
   return {
     settingsScreen: () => ({
@@ -367,6 +378,8 @@ function createFreshImplementationFlow(
     selectModel(itemId: string) {
       const choice = models.find((candidate) => candidate.itemId === itemId);
       selectedModel = itemId === "same-as-plan" || choice?.isPlanModel ? undefined : choice;
+      // 手工选择只应用一个模型，不再拼接 JSON 配置的回退链。
+      selectedChain = selectedModel ? [selectedModel.model] : [];
       selectedModelUsesDefault = false;
       unavailableDefaultActive = false;
     },
@@ -374,24 +387,45 @@ function createFreshImplementationFlow(
       selectedThinkingLevel = IMPLEMENTATION_THINKING_LEVELS.find((level) => level === itemId);
     },
     start(signal: AbortSignal) {
-      if (
-        selectedModelUsesDefault &&
-        selectedModel &&
-        !findAvailableImplementationModel(snapshotAvailableImplementationModels(ctx), selectedModel.model)
-      ) {
-        selectedModel = undefined;
-        selectedModelUsesDefault = false;
-        unavailableDefaultActive = true;
-        ctx.ui.notify(
-          `Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`,
-          "warning",
-        );
+      if (selectedModelUsesDefault) {
+        // 菜单打开期间模型目录可能变化：按剩余候选链重新解析，首个可用候选作主模型，其余仍作后备。
+        const available = snapshotAvailableImplementationModels(ctx);
+        const usable = selectedChain.filter((candidate) => findAvailableImplementationModel(available, candidate));
+        const displayed = selectedChain[0];
+        if (usable.length === 0) {
+          selectedModel = undefined;
+          selectedChain = [];
+          selectedModelUsesDefault = false;
+          unavailableDefaultActive = true;
+          ctx.ui.notify(
+            `Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`,
+            "warning",
+          );
+        } else {
+          const [model] = usable;
+          if (displayed && (displayed.provider !== model.provider || displayed.modelId !== model.modelId)) {
+            ctx.ui.notify(
+              `Configured default ${safeModelReference(displayed)} is unavailable; using ${safeModelReference(model)}.`,
+              "warning",
+            );
+          }
+          selectedChain = usable;
+          selectedModel = models.find(
+            (choice) => choice.modelInfo.provider === model.provider && choice.modelInfo.id === model.modelId,
+          );
+        }
       }
-      const model = selectedModel?.model ?? planModel;
+      // 手工选择只用一个模型；未改选时用整条链；两者都没有才回到规划模型。
+      let chain: ImplementationModelOverride[] = [];
+      if (selectedModelUsesDefault) chain = selectedChain;
+      else if (selectedModel) chain = [selectedModel.model];
+      else if (planModel) chain = [planModel];
+      const [model, ...fallbackModels] = chain;
       const thinkingLevel = selectedThinkingLevel ?? planThinkingLevel;
       return implementFresh(
         {
           ...(model ? { model: { ...model } } : {}),
+          ...(fallbackModels.length > 0 ? { fallbackModels } : {}),
           ...(thinkingLevel ? { thinkingLevel } : {}),
         },
         signal,

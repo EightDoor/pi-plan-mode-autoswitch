@@ -3,11 +3,15 @@ import { findAvailableImplementationModel, snapshotAvailableImplementationModels
 import type { PlanExportDestination } from "./plan-export.js";
 import {
   configuredAutoSwitchModel,
-  configuredAutoSwitchModelTarget,
+  configuredAutoSwitchModelTargets,
   type PlanModeFixedThinkingLevel,
   type PlanModeSettings,
 } from "./settings.js";
-import type { ImplementationRuntimeSelection, PlanModeState } from "./state.js";
+import {
+  type ImplementationRuntimeSelection,
+  implementationRuntimeModelSelection,
+  type PlanModeState,
+} from "./state.js";
 
 type InteractiveUi = typeof import("./interactive-ui.js");
 
@@ -48,26 +52,24 @@ export function createPlanActionController(options: PlanActionControllerOptions)
   // 实施阶段的默认模型统一取 autoSwitchModel 开启时的 normalModel；thinking 继承当前等级。
   const configuredDefaults = (): ImplementationRuntimeSelection => {
     const settings = options.getSettings();
-    const model = configuredAutoSwitchModel(settings) ? configuredAutoSwitchModelTarget(settings, "normal") : undefined;
-    return {
-      ...(model ? { model: { ...model } } : {}),
-    };
+    const models = configuredAutoSwitchModel(settings) ? configuredAutoSwitchModelTargets(settings, "normal") : [];
+    return implementationRuntimeModelSelection(models);
   };
   const effectiveDefaults = (ctx: ExtensionContext): ImplementationRuntimeSelection => {
     const configured = configuredDefaults();
-    const availableModel = findAvailableImplementationModel(
-      snapshotAvailableImplementationModels(ctx),
-      configured.model,
-    );
-    if (configured.model && !availableModel) {
+    const configuredModels = [...(configured.model ? [configured.model] : []), ...(configured.fallbackModels ?? [])];
+    const available = snapshotAvailableImplementationModels(ctx);
+    // 整条候选链都不可用时才提示并沿用当前模型；链路中可用的部分按声明顺序交给实施流程。
+    const usableModels = configuredModels.filter((candidate) => findAvailableImplementationModel(available, candidate));
+    if (configuredModels.length > 0 && usableModels.length === 0) {
       ctx.ui.notify("The configured Plan exit model is unavailable; using the current model.", "warning");
     }
     const currentModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined;
-    const model = availableModel ? { provider: availableModel.provider, modelId: availableModel.id } : currentModel;
+    const models = usableModels.length > 0 ? usableModels : currentModel ? [currentModel] : [];
     // 目标会话 setModel 会重置思考等级，必须显式带上当前等级才能真正“继承”。
     const thinkingLevel = options.getThinkingLevel();
     return {
-      ...(model ? { model } : {}),
+      ...implementationRuntimeModelSelection(models),
       ...(thinkingLevel ? { thinkingLevel } : {}),
     };
   };

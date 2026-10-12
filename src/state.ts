@@ -34,11 +34,22 @@ export interface SavedPlan {
 
 export interface ImplementationRuntimeSelection {
   model?: ImplementationModelOverride;
+  /** 在 model 失败后按声明顺序尝试的后备模型。 */
+  fallbackModels?: ImplementationModelOverride[];
   thinkingLevel?: PlanModeFixedThinkingLevel;
 }
 
 export interface PendingImplementationRuntime extends ImplementationRuntimeSelection {
-  version: 1;
+  version: 1 | 2;
+}
+
+/** 把有序候选链转成运行时选择：首个为主模型，其余为后备。 */
+export function implementationRuntimeModelSelection(
+  models: readonly ImplementationModelOverride[],
+): ImplementationRuntimeSelection {
+  const [model, ...fallbackModels] = models;
+  if (!model) return {};
+  return fallbackModels.length > 0 ? { model, fallbackModels } : { model };
 }
 
 export interface PlanModeWorkflowToolPolicy {
@@ -145,31 +156,58 @@ function normalizeSavedPlan(value: unknown): SavedPlan | undefined {
 }
 
 function normalizePendingImplementationRuntime(value: unknown): PendingImplementationRuntime | undefined {
-  if (!isRecord(value) || value.version !== 1) return undefined;
-  if (Object.keys(value).some((key) => key !== "version" && key !== "model" && key !== "thinkingLevel")) {
-    return undefined;
-  }
-  let model: ImplementationModelOverride | undefined;
-  if (value.model !== undefined) {
-    if (!isRecord(value.model) || Object.keys(value.model).some((key) => key !== "provider" && key !== "modelId")) {
-      return undefined;
-    }
-    if (
-      !isPendingImplementationModelIdentifier(value.model.provider) ||
-      !isPendingImplementationModelIdentifier(value.model.modelId)
-    ) {
-      return undefined;
-    }
-    model = { provider: value.model.provider, modelId: value.model.modelId };
-  }
+  if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) return undefined;
+  const version = value.version;
+  const allowedKeys =
+    version === 2 ? ["version", "model", "fallbackModels", "thinkingLevel"] : ["version", "model", "thinkingLevel"];
+  if (Object.keys(value).some((key) => !allowedKeys.includes(key))) return undefined;
+  const model = value.model === undefined ? undefined : normalizePendingModel(value.model);
+  if (value.model !== undefined && !model) return undefined;
+  const fallbackModels = normalizePendingFallbackModels(value.fallbackModels, model, version);
+  if (value.fallbackModels !== undefined && !fallbackModels) return undefined;
   const thinkingLevel = value.thinkingLevel === undefined ? undefined : fixedThinkingLevel(value.thinkingLevel);
   if (value.thinkingLevel !== undefined && !thinkingLevel) return undefined;
   if (!model && !thinkingLevel) return undefined;
   return {
-    version: 1,
+    version: fallbackModels && fallbackModels.length > 0 ? 2 : 1,
     ...(model ? { model } : {}),
+    ...(fallbackModels && fallbackModels.length > 0 ? { fallbackModels } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),
   };
+}
+
+function normalizePendingModel(value: unknown): ImplementationModelOverride | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "provider" && key !== "modelId")) {
+    return undefined;
+  }
+  if (
+    !isPendingImplementationModelIdentifier(value.provider) ||
+    !isPendingImplementationModelIdentifier(value.modelId)
+  ) {
+    return undefined;
+  }
+  return { provider: value.provider, modelId: value.modelId };
+}
+
+/** v1 一次性状态没有后备链；v2 的后备链必须先有主模型，且去重后非空。 */
+function normalizePendingFallbackModels(
+  value: unknown,
+  model: ImplementationModelOverride | undefined,
+  version: 1 | 2,
+): ImplementationModelOverride[] | undefined {
+  if (value === undefined) return [];
+  if (version !== 2 || !model || !Array.isArray(value) || value.length === 0) return undefined;
+  const seen = new Set([JSON.stringify([model.provider, model.modelId])]);
+  const fallbackModels: ImplementationModelOverride[] = [];
+  for (const item of value) {
+    const candidate = normalizePendingModel(item);
+    if (!candidate) return undefined;
+    const key = JSON.stringify([candidate.provider, candidate.modelId]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fallbackModels.push(candidate);
+  }
+  return fallbackModels;
 }
 
 function normalizeActiveImplementation(value: unknown): ActiveImplementationPlan | undefined {

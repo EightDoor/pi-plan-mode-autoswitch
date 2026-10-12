@@ -219,11 +219,11 @@ The same flat menu shows **Implement here** and **Start fresh and implement**, e
 Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
 Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
 One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
-The model row starts from the **Plan exit model** (`normalModel`, used only when `autoSwitchModel` is on); when it is unset or unavailable it shows **same as plan** and falls back to the current session model.
+The model row starts from the **Plan exit model** (`normalModel` candidate chain, used only when `autoSwitchModel` is on); when it is unset or the whole chain is unavailable it shows **same as plan** and falls back to the current session model.
 The thinking row always starts from the planning session's current level with **same as plan**; both rows are one-shot menu choices and are never written back to persistent settings.
 The fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 Back navigation preserves this menu-local draft, while closing and reopening the menu restores those initial values.
-If the configured model is outside the current scope or no longer available, the row reports the fallback and uses **same as plan** without deleting the stored preference.
+If the configured primary model is outside the current scope or no longer available, the row uses the next usable candidate instead; only a fully unavailable chain reports the fallback and uses **same as plan**, without deleting the stored preference.
 The saved-plan menu keeps its direct fresh-session action without optional rows and applies the same initial values and fallback.
 
 Starting from that settings page waits for the source session to become idle, re-resolves and authenticates an explicit model, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
@@ -232,7 +232,7 @@ Concurrent prompts that arrive while those choices are being applied are queued 
 If durable consumption blocks the kickoff, the handoff reports a partial start and restores a conversation-history prompt to the editor instead of reporting success.
 Changing only the model keeps the planning thinking level; changing only the thinking level keeps the planning model.
 If Pi clamps an unsupported thinking level, the extension reports the effective level.
-If the chosen model disappears or loses authentication after source preflight, the destination reports the race, consumes the intent without retrying it later, and continues with its default model.
+If the chosen model disappears or loses authentication after source preflight, the destination keeps trying the remaining candidates; when all of them fail it reports the race, consumes the intent without retrying it later, and continues with its default model.
 The destination still loads its normal `AGENTS.md`, skills, project resources, and extensions.
 Choosing **Export plan…** asks for a destination, writes the plan, appends the Normal contract, restores inherited thinking, and leaves Plan mode without starting a model turn or changing active tools.
 Choosing **Save for later**—or running `/plan save`—instead stores one plan in the current Pi session before leaving Plan mode.
@@ -375,13 +375,16 @@ The optional file is read at session start and watched for changes; only an expl
   "implementationPlanRetention": "clear-on-start",
   "autoSwitchModel": true,
   "planModel": { "provider": "<plan-provider>", "modelId": "<plan-model>" },
-  "normalModel": { "provider": "<normal-provider>", "modelId": "<normal-model>" },
+  "normalModel": [
+    { "provider": "<normal-provider>", "modelId": "<normal-model>" },
+    { "provider": "<fallback-provider>", "modelId": "<fallback-model>" }
+  ],
   "defaultPlanExportPath": "PLAN.md"
 }
 ```
 
 By default, Plan mode inherits thinking, allows active safe built-ins, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
-Models come entirely from user configuration; the extension ships no built-in implementation model default. With `autoSwitchModel` enabled, entering/leaving Plan mode and every implementation entry point (active plan, saved plan, implement here, fresh session) switches to `normalModel` and keeps the current thinking level; without `autoSwitchModel` or `normalModel`, nothing switches.
+Models come entirely from user configuration; the extension ships no built-in implementation model default. With `autoSwitchModel` enabled, entering/leaving Plan mode and every implementation entry point (active plan, saved plan, implement here, fresh session) switches to `normalModel` and keeps the current thinking level; without `autoSwitchModel` or `normalModel`, nothing switches. `planModel` and `normalModel` each accept one model object or a non-empty array ordered as a fallback chain: a candidate that cannot be resolved, is outside the current catalogue, fails authentication, or is refused by Pi moves to the next one, and only a fully failed chain keeps the current model. A fallback switch and a fully failed chain each report one warning.
 The shortcut is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
 Until then, the current shortcut binding stays unchanged.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.

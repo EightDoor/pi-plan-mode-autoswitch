@@ -65,10 +65,36 @@ test("pending implementation runtime state restores only strict bounded one-shot
     modelId: boundaryModelId,
   });
 
+  // v2 恢复有序后备链，并丢弃与主模型重复的候选项。
+  const chained = restorePlanModeState(
+    [
+      stateEntry({
+        enabled: false,
+        awaitingAction: false,
+        pendingImplementationRuntime: {
+          version: 2,
+          model: { provider: "provider", modelId: "model" },
+          fallbackModels: [
+            { provider: "other", modelId: "fallback" },
+            { provider: "provider", modelId: "model" },
+          ],
+          thinkingLevel: "high",
+        },
+      }),
+    ],
+    STATE_ENTRY_TYPE,
+  );
+  assert.deepEqual(chained.pendingImplementationRuntime, {
+    version: 2,
+    model: { provider: "provider", modelId: "model" },
+    fallbackModels: [{ provider: "other", modelId: "fallback" }],
+    thinkingLevel: "high",
+  });
+
   const invalidValues = [
     null,
     {},
-    { version: 2, thinkingLevel: "high" },
+    { version: 3, thinkingLevel: "high" },
     { version: 1, thinkingLevel: "inherit" },
     { version: 1, thinkingLevel: "high", unknown: true },
     { version: 1, model: { provider: "", modelId: "model" } },
@@ -80,6 +106,15 @@ test("pending implementation runtime state restores only strict bounded one-shot
       },
     },
     { version: 1, model: { provider: "provider", modelId: "model", name: "extra" } },
+    // v1 一次性状态没有后备链；v2 的后备链必须先有主模型且非空。
+    {
+      version: 1,
+      model: { provider: "provider", modelId: "model" },
+      fallbackModels: [{ provider: "other", modelId: "fallback" }],
+    },
+    { version: 2, fallbackModels: [{ provider: "other", modelId: "fallback" }] },
+    { version: 2, model: { provider: "provider", modelId: "model" }, fallbackModels: [] },
+    { version: 2, model: { provider: "provider", modelId: "model" }, fallbackModels: [{ provider: "other" }] },
   ];
   for (const pendingImplementationRuntime of invalidValues) {
     const restored = restorePlanModeState(
@@ -1059,4 +1094,205 @@ test("destination consumes a thrown model application without retrying", async (
   assert.equal(calls, 1);
   assert.match(context.notifications.at(-1)?.message ?? "", /could not be applied/u);
   assert.equal(JSON.stringify(context.notifications).includes("\u001b"), false);
+});
+
+const FALLBACK = { provider: "fallback-provider", id: "fallback-model", name: "Fallback" };
+const FALLBACK_TWO = { provider: "fallback-provider-two", id: "fallback-model-two" };
+
+test("destination walks a restored v2 fallback chain in order", async () => {
+  const branch = [
+    stateEntry({
+      enabled: false,
+      awaitingAction: false,
+      pendingImplementationRuntime: {
+        version: 2,
+        model: { provider: TARGET.provider, modelId: TARGET.id },
+        fallbackModels: [{ provider: FALLBACK.provider, modelId: FALLBACK.id }],
+        thinkingLevel: "high",
+      },
+    }),
+  ];
+  const mock = createMockPi({ thinkingLevel: "low" });
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    // 首选模型解析得到但应用失败，应继续尝试后备候选。
+    return (model as { provider: string }).provider === TARGET.provider ? false : applied;
+  };
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext({
+    sessionManager: { getBranch: () => branch, getEntries: () => branch },
+    modelRegistry: {
+      find: (provider: string, id: string) =>
+        (provider === TARGET.provider && id === TARGET.id) || (provider === FALLBACK.provider && id === FALLBACK.id)
+          ? provider === TARGET.provider
+            ? TARGET
+            : FALLBACK
+          : undefined,
+      getApiKeyAndHeaders: async () => ({ ok: true as const }),
+    },
+  });
+  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  assert.equal(await submitInput(mock, context.ctx), undefined);
+
+  assert.deepEqual(mock.setModels, [TARGET, FALLBACK]);
+  assert.equal(mock.thinkingLevel, "high");
+  assert.ok(context.notifications.some((notice) => /fell back to/iu.test(notice.message)));
+  assert.equal(
+    (mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)?.pendingImplementationRuntime,
+    undefined,
+  );
+});
+
+test("destination reports one bounded warning when the whole restored chain fails", async () => {
+  const branch = [
+    stateEntry({
+      enabled: false,
+      awaitingAction: false,
+      pendingImplementationRuntime: {
+        version: 2,
+        model: { provider: TARGET.provider, modelId: TARGET.id },
+        fallbackModels: [{ provider: FALLBACK.provider, modelId: FALLBACK.id }],
+      },
+    }),
+  ];
+  const mock = createMockPi();
+  let calls = 0;
+  mock.rawPi.setModel = async () => {
+    calls += 1;
+    return false;
+  };
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext({
+    sessionManager: { getBranch: () => branch, getEntries: () => branch },
+    modelRegistry: {
+      find: () => TARGET,
+      getApiKeyAndHeaders: async () => ({ ok: true as const }),
+    },
+  });
+  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  assert.equal(await submitInput(mock, context.ctx), undefined);
+
+  assert.equal(calls, 2);
+  const warnings = context.notifications.filter((notice) => /implementation model/iu.test(notice.message));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]?.message ?? "", /could not be applied/u);
+  assert.equal(
+    (mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)?.pendingImplementationRuntime,
+    undefined,
+  );
+});
+
+test("source preflight falls back to the next candidate and persists the remaining chain", async () => {
+  let destinationState: unknown;
+  const authModels: unknown[] = [];
+  const source = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    modelRegistry: {
+      find: (provider: string, id: string) =>
+        provider === TARGET.provider && id === TARGET.id
+          ? TARGET
+          : provider === FALLBACK.provider && id === FALLBACK.id
+            ? FALLBACK
+            : provider === FALLBACK_TWO.provider && id === FALLBACK_TWO.id
+              ? FALLBACK_TWO
+              : undefined,
+      getApiKeyAndHeaders: async (model: unknown) => {
+        authModels.push(model);
+        // 首选模型认证失败，后备模型可用。
+        return (model as { provider: string }).provider === TARGET.provider
+          ? { ok: false as const, error: "configure auth" }
+          : { ok: true as const };
+      },
+    },
+    sessionManager: { getSessionFile: () => "/sessions/planning.jsonl" },
+    newSession: async (options: {
+      setup?: (manager: {
+        appendCustomMessageEntry(): string;
+        appendCustomEntry(customType: string, data: unknown): string;
+      }) => Promise<void>;
+      withSession?: (ctx: {
+        sessionManager: { getBranch(): unknown[] };
+        sendUserMessage(message: string): Promise<void>;
+      }) => Promise<void>;
+    }) => {
+      await options.setup?.({
+        appendCustomMessageEntry: () => "contract",
+        appendCustomEntry(_customType, data) {
+          destinationState = data;
+          return "state";
+        },
+      });
+      await options.withSession?.({
+        sessionManager: { getBranch: () => [] },
+        sendUserMessage: async () => undefined,
+      });
+      return { cancelled: false };
+    },
+  });
+
+  const result = await startFreshImplementationSession(source.ctx, {
+    plan: PLAN,
+    source: "plan_mode_complete",
+    retention: "keep",
+    stateEntryType: STATE_ENTRY_TYPE,
+    runtime: {
+      model: { provider: TARGET.provider, modelId: TARGET.id },
+      fallbackModels: [
+        { provider: FALLBACK.provider, modelId: FALLBACK.id },
+        { provider: FALLBACK_TWO.provider, modelId: FALLBACK_TWO.id },
+      ],
+      thinkingLevel: "high",
+    },
+    isCurrent: () => true,
+  });
+
+  assert.equal(result.kind, "started");
+  assert.deepEqual(authModels, [TARGET, FALLBACK]);
+  // 首选认证失败后，目标会话从已解析的后备候选开始，并保留其余候选。
+  assert.deepEqual((destinationState as { pendingImplementationRuntime?: unknown }).pendingImplementationRuntime, {
+    version: 2,
+    model: { provider: FALLBACK.provider, modelId: FALLBACK.id },
+    fallbackModels: [{ provider: FALLBACK_TWO.provider, modelId: FALLBACK_TWO.id }],
+    thinkingLevel: "high",
+  });
+});
+
+test("source preflight rejects with one warning when no candidate can be used", async () => {
+  let newSessionCalls = 0;
+  const source = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    modelRegistry: {
+      find: (provider: string, id: string) => (provider === TARGET.provider && id === TARGET.id ? TARGET : undefined),
+      getApiKeyAndHeaders: async () => ({ ok: false as const, error: "configure auth" }),
+    },
+    sessionManager: { getSessionFile: () => "/sessions/planning.jsonl" },
+    newSession: async () => {
+      newSessionCalls += 1;
+      return { cancelled: false };
+    },
+  });
+
+  const result = await startFreshImplementationSession(source.ctx, {
+    plan: PLAN,
+    source: "plan_mode_complete",
+    retention: "keep",
+    stateEntryType: STATE_ENTRY_TYPE,
+    runtime: {
+      model: { provider: TARGET.provider, modelId: TARGET.id },
+      fallbackModels: [{ provider: FALLBACK.provider, modelId: FALLBACK.id }],
+    },
+    isCurrent: () => true,
+  });
+
+  assert.equal(result.kind, "rejected");
+  assert.equal(newSessionCalls, 0);
+  const warnings = source.notifications.filter((notice) => /implement the plan/iu.test(notice.message));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]?.message ?? "", /no longer available/u);
+  assert.match(warnings[0]?.message ?? "", /choose another model|configure authentication/iu);
 });

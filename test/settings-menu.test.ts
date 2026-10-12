@@ -660,3 +660,70 @@ test("Plan settings adapt to RPC cancellation and disposal aborts an in-flight s
     assert.deepEqual(notifications, []);
   });
 });
+
+test("Plan settings summarize an ordered candidate chain and reset it on a single pick", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        autoSwitchModel: true,
+        normalModel: [
+          { provider: "provider-one", modelId: "model-one" },
+          { provider: "provider-two", modelId: "model-two" },
+        ],
+      }),
+    );
+    const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+    try {
+      await tui.waitForOpen();
+      assert.match(tui.render(160).join("\n"), /Plan exit model\s+model-one \[provider-one\] · \+1 fallback/u);
+
+      // 打开 Plan exit model 的单选页并确认高亮的首个可用候选。
+      for (let index = 0; index < 7; index += 1) tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+
+      // 单选保存把该方向重置为一个模型，JSON 里的候选链随之消失。
+      assert.deepEqual((JSON.parse(await readFile(settingsPath, "utf8")) as { normalModel: unknown }).normalModel, {
+        provider: "provider-one",
+        modelId: "model-one",
+      });
+      const frame = tui.render(160).join("\n");
+      assert.match(frame, /Plan exit model\s+model-one \[provider-one\]/u);
+      assert.doesNotMatch(frame, /fallback/u);
+    } finally {
+      tui.press("ctrl+c");
+      await running;
+    }
+  });
+});
+
+test("Plan settings report an unavailable candidate chain with its fallback count", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        autoSwitchModel: true,
+        normalModel: [
+          { provider: "missing-provider", modelId: "missing-model" },
+          { provider: "missing-provider-two", modelId: "missing-model-two" },
+        ],
+      }),
+    );
+    const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+    try {
+      await tui.waitForOpen();
+      assert.match(
+        tui.render(160).join("\n"),
+        /Plan exit model\s+off · missing-model \[missing-provider\] unavailable · \+1 fallback/u,
+      );
+    } finally {
+      tui.press("ctrl+c");
+      await running;
+    }
+  });
+});

@@ -189,3 +189,97 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
     );
   }
 });
+
+const CHAIN_PRIMARY = { provider: "provider-one", id: "model-one" };
+const CHAIN_FALLBACK = { provider: "provider-two", id: "model-two" };
+
+test("saved-plan fresh actions resolve the configured chain to its usable candidates", async () => {
+  const scenarios = [
+    {
+      name: "both candidates available",
+      availableModels: [CHAIN_PRIMARY, CHAIN_FALLBACK],
+      runtime: {
+        model: { provider: CHAIN_PRIMARY.provider, modelId: CHAIN_PRIMARY.id },
+        fallbackModels: [{ provider: CHAIN_FALLBACK.provider, modelId: CHAIN_FALLBACK.id }],
+        thinkingLevel: "medium",
+      },
+      warns: false,
+    },
+    {
+      name: "primary unavailable",
+      availableModels: [CHAIN_FALLBACK],
+      runtime: {
+        model: { provider: CHAIN_FALLBACK.provider, modelId: CHAIN_FALLBACK.id },
+        thinkingLevel: "medium",
+      },
+      warns: false,
+    },
+    {
+      name: "whole chain unavailable",
+      availableModels: [],
+      runtime: {
+        model: { provider: "planning-provider", modelId: "planning-model" },
+        thinkingLevel: "medium",
+      },
+      warns: true,
+    },
+  ];
+  for (const scenario of scenarios) {
+    let selectedRuntime: unknown;
+    const controller = createPlanActionController({
+      loadInteractiveUi: async () =>
+        ({
+          showSavedPlanMenu: async (_ctx: unknown, menuOptions: Record<string, unknown>) => {
+            await (menuOptions.implementFresh as (signal: AbortSignal) => Promise<void>)(new AbortController().signal);
+          },
+        }) as never,
+      getState: () => ({
+        enabled: false,
+        awaitingAction: false,
+        savedPlan: { plan: "# Plan", source: "plan_mode_complete" },
+      }),
+      captureLifecycle: () => ({
+        signal: new AbortController().signal,
+        isCurrent: () => true,
+      }),
+      statusText: () => "saved",
+      getThinkingLevel: () => "medium",
+      getSettings: () => ({
+        thinkingLevel: "inherit",
+        autoSwitchModel: true,
+        normalModel: [
+          { provider: CHAIN_PRIMARY.provider, modelId: CHAIN_PRIMARY.id },
+          { provider: CHAIN_FALLBACK.provider, modelId: CHAIN_FALLBACK.id },
+        ],
+      }),
+      implementationOutcome: () => "",
+      getExportDestination: () => ({ configuredPath: "plan.md", resolvedPath: "/tmp/plan.md" }),
+      show: () => undefined,
+      finalize: () => undefined,
+      implementHere: () => undefined,
+      implementFresh: (_ctx, _isCurrent, runtime) => {
+        selectedRuntime = runtime;
+      },
+      exportPlan: async () => false,
+      settings: async () => false,
+      save: () => undefined,
+      stay: () => undefined,
+      exitReady: () => undefined,
+      clearSaved: () => undefined,
+    });
+    const context = createMockContext({
+      hasUI: true,
+      model: { provider: "planning-provider", id: "planning-model" },
+      modelRegistry: { getAvailable: () => scenario.availableModels },
+    });
+
+    await controller.showSaved(context.ctx);
+
+    assert.deepEqual(selectedRuntime, scenario.runtime, scenario.name);
+    assert.equal(
+      context.notifications.some((notice) => /unavailable/u.test(notice.message)),
+      scenario.warns,
+      scenario.name,
+    );
+  }
+});

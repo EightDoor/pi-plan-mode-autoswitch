@@ -31,6 +31,7 @@ import {
   formatTransferredPlanPrompt,
   startFreshImplementationFromState,
 } from "./fresh-implementation.js";
+import { implementationModelFailureSummary } from "./implementation-models.js";
 import {
   createImplementationRetentionCoordinator,
   implementationRetentionPreview,
@@ -70,7 +71,7 @@ import { preflightSavedPlanImplementation, savedPlanBlocksNewWorkflow } from "./
 import {
   awaitPlanModeSettingsWrites,
   configuredAutoSwitchModel,
-  configuredAutoSwitchModelTarget,
+  configuredAutoSwitchModelTargets,
   configuredImplementationPlanRetention,
   configuredPlanModeToggleShortcut,
   configuredThinkingLevel,
@@ -1160,6 +1161,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       runtime: runtime
         ? {
             ...(runtime.model ? { model: { ...runtime.model } } : {}),
+            ...(runtime.fallbackModels && runtime.fallbackModels.length > 0
+              ? { fallbackModels: runtime.fallbackModels.map((model) => ({ ...model })) }
+              : {}),
             ...(runtime.thinkingLevel ? { thinkingLevel: runtime.thinkingLevel } : {}),
           }
         : undefined,
@@ -1753,62 +1757,62 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         };
 
         if (intent.model) {
-          let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
-          let resolutionFailed = false;
-          try {
-            model = ctx.modelRegistry.find(intent.model.provider, intent.model.modelId);
-          } catch (error: unknown) {
-            notifyCurrent(
-              `Implementation model ${terminalModelReference(intent.model)} could not be resolved: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
-            );
-            resolutionFailed = true;
-            model = undefined;
-          }
-          if (!model && !resolutionFailed) {
-            notifyCurrent(
-              `Implementation model ${terminalModelReference(intent.model)} is no longer available. The destination default model will continue.`,
-            );
-          }
-          if (model) {
+          // 候选链按声明顺序尝试：解析、认证、应用任一环节失败都进入下一个候选。
+          const candidates = [intent.model, ...(intent.fallbackModels ?? [])];
+          const failures: string[] = [];
+          let appliedReference: string | undefined;
+          for (let index = 0; index < candidates.length && !appliedReference; index += 1) {
+            const candidate = candidates[index];
+            const reference = terminalModelReference(candidate);
+            let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+            try {
+              model = ctx.modelRegistry.find(candidate.provider, candidate.modelId);
+            } catch (error: unknown) {
+              failures.push(`${reference} could not be resolved: ${terminalErrorDetail(error)}`);
+              continue;
+            }
+            if (!model) {
+              failures.push(`${reference} is no longer available`);
+              continue;
+            }
             let authenticated = false;
             try {
               const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
               if (!isCurrent()) return "stale";
               if (auth.ok) authenticated = true;
-              else {
-                notifyCurrent(
-                  `Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(auth.error)}. The destination default model will continue.`,
-                );
-              }
+              else failures.push(`${reference} could not be authenticated: ${safeTerminalText(auth.error)}`);
             } catch (error: unknown) {
-              notifyCurrent(
-                `Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
-              );
+              failures.push(`${reference} could not be authenticated: ${terminalErrorDetail(error)}`);
             }
             if (!isCurrent()) return "stale";
-            if (authenticated) {
-              let applied = false;
-              let applicationFailed = false;
-              application.drainOnShutdown = true;
+            if (!authenticated) continue;
+            let applied = false;
+            application.drainOnShutdown = true;
+            try {
               try {
-                try {
-                  applied = await pi.setModel(model);
-                } catch (error: unknown) {
-                  applicationFailed = true;
-                  notifyCurrent(
-                    `Implementation model ${terminalModelReference(intent.model)} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
-                  );
-                }
-              } finally {
-                application.drainOnShutdown = false;
+                applied = await pi.setModel(model);
+              } catch (error: unknown) {
+                failures.push(`${reference} could not be applied: ${terminalErrorDetail(error)}`);
               }
-              if (!isCurrent()) return "stale";
-              if (!applied && !applicationFailed) {
-                notifyCurrent(
-                  `Implementation model ${terminalModelReference(intent.model)} could not be applied after authentication changed. The destination default model will continue.`,
-                );
-              }
+            } finally {
+              application.drainOnShutdown = false;
             }
+            if (!isCurrent()) return "stale";
+            if (!applied) {
+              failures.push(`${reference} could not be applied`);
+              continue;
+            }
+            appliedReference = reference;
+          }
+          if (appliedReference && failures.length > 0) {
+            notifyCurrent(
+              `Implementation model fell back to ${appliedReference} because: ${implementationModelFailureSummary(failures)}.`,
+            );
+          }
+          if (!appliedReference) {
+            notifyCurrent(
+              `Unable to apply the requested implementation model: ${implementationModelFailureSummary(failures)}. The destination default model will continue.`,
+            );
           }
         }
         if (!isCurrent()) return "stale";
@@ -1929,29 +1933,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   ): Promise<void> {
     try {
       if (!configuredAutoSwitchModel(settings)) return;
-      const target = targetOverride ?? configuredAutoSwitchModelTarget(settings, direction);
-      if (!target) return;
-      // Settings validation does not reject control characters; sanitize before any notification.
-      const targetReference = terminalModelReference(target);
-      const current = ctx.model;
-      if (current && current.provider === target.provider && current.id === target.modelId) return;
-      let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
-      try {
-        model = ctx.modelRegistry.find(target.provider, target.modelId);
-      } catch (error: unknown) {
-        ctx.ui.notify(
-          `Auto model switch (${direction}) could not resolve ${targetReference}: ${terminalErrorDetail(error)}. Keeping the current model.`,
-          "warning",
-        );
-        return;
-      }
-      if (!model) {
-        ctx.ui.notify(
-          `Auto model switch (${direction}) target ${targetReference} is unavailable. Keeping the current model.`,
-          "warning",
-        );
-        return;
-      }
+      // 显式覆盖只尝试一个模型；配置的候选链按声明顺序逐个回退。
+      const candidates = targetOverride ? [targetOverride] : configuredAutoSwitchModelTargets(settings, direction);
+      if (candidates.length === 0) return;
       const session = ctx.sessionManager;
       const generationAtStart = workflowGeneration;
       const menuGenerationAtStart = menuGeneration;
@@ -1962,21 +1946,53 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         currentSession !== session ||
         workflowGeneration !== generationAtStart ||
         menuGeneration !== menuGenerationAtStart;
+      const failures: string[] = [];
       try {
-        const applied = await pi.setModel(model);
-        if (stale()) return;
-        if (!applied) {
+        for (const target of candidates) {
+          if (stale()) return;
+          // Settings validation does not reject control characters; sanitize before any notification.
+          const targetReference = terminalModelReference(target);
+          const current = ctx.model;
+          // 目标已经是当前模型：该候选视为成功，无需重复切换。
+          if (current && current.provider === target.provider && current.id === target.modelId) return;
+          let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+          try {
+            model = ctx.modelRegistry.find(target.provider, target.modelId);
+          } catch (error: unknown) {
+            failures.push(`${targetReference} could not be resolved: ${terminalErrorDetail(error)}`);
+            continue;
+          }
+          if (!model) {
+            failures.push(`${targetReference} is unavailable`);
+            continue;
+          }
+          let applied = false;
+          try {
+            applied = await pi.setModel(model);
+          } catch (error: unknown) {
+            if (stale()) return;
+            failures.push(`${targetReference} failed: ${terminalErrorDetail(error)}`);
+            continue;
+          }
+          if (stale()) return;
+          if (!applied) {
+            failures.push(`${targetReference} was not applied`);
+            continue;
+          }
+          if (failures.length > 0) {
+            ctx.ui.notify(
+              `Auto model switch (${direction}) fell back to ${targetReference} because: ${implementationModelFailureSummary(failures)}`,
+              "warning",
+            );
+          }
+          return;
+        }
+        if (!stale()) {
           ctx.ui.notify(
-            `Auto model switch (${direction}) to ${targetReference} was not applied. Keeping the current model.`,
+            `Auto model switch (${direction}) kept the current model because: ${implementationModelFailureSummary(failures)}`,
             "warning",
           );
         }
-      } catch (error: unknown) {
-        if (stale()) return;
-        ctx.ui.notify(
-          `Auto model switch (${direction}) to ${targetReference} failed: ${terminalErrorDetail(error)}. Keeping the current model.`,
-          "warning",
-        );
       } finally {
         if (!stale() && pi.getThinkingLevel() !== thinkingLevel) pi.setThinkingLevel(thinkingLevel);
       }

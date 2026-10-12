@@ -536,3 +536,137 @@ test("closing and reopening fresh settings resets its draft to the plan runtime"
     thinkingLevel: "medium",
   });
 });
+
+const DIRTY_MODEL = { provider: "provider\u001b[31m-one", modelId: "model\u202e-one" };
+const CLEAN_MODEL = { provider: "provider-two", modelId: "model-two" };
+
+test("fresh settings keep the configured fallback chain when the default model is kept", async () => {
+  let selectedRuntime: unknown;
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    thinkingLevel: "medium",
+    modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
+    select: async (title: string) => {
+      if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+      if (title.startsWith("Fresh implementation settings")) return "Start fresh implementation";
+      return undefined;
+    },
+  });
+
+  await showReadyPlanMenu(
+    context.ctx,
+    menuOptions({
+      planThinkingLevel: "medium",
+      implementationDefaults: {
+        model: DIRTY_MODEL,
+        fallbackModels: [CLEAN_MODEL],
+        thinkingLevel: "high",
+      },
+      implementFresh: (runtime: unknown) => {
+        selectedRuntime = runtime;
+      },
+    }),
+  );
+
+  assert.deepEqual(selectedRuntime, {
+    model: DIRTY_MODEL,
+    fallbackModels: [CLEAN_MODEL],
+    thinkingLevel: "high",
+  });
+  assert.deepEqual(context.notifications, []);
+});
+
+test("fresh settings skip an unavailable primary default and use the next available candidate", async () => {
+  let selectedRuntime: unknown;
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    thinkingLevel: "medium",
+    // 首选不在目录中，第二个候选可用。
+    modelRegistry: { getAvailable: () => [AVAILABLE_MODELS[0]] },
+    select: async (title: string) => {
+      if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+      if (title.startsWith("Fresh implementation settings")) return "Start fresh implementation";
+      return undefined;
+    },
+  });
+
+  await showReadyPlanMenu(
+    context.ctx,
+    menuOptions({
+      planThinkingLevel: "medium",
+      implementationDefaults: {
+        model: CLEAN_MODEL,
+        fallbackModels: [DIRTY_MODEL],
+        thinkingLevel: "high",
+      },
+      implementFresh: (runtime: unknown) => {
+        selectedRuntime = runtime;
+      },
+    }),
+  );
+
+  // 可用候选项选择后不再保留其后备项，且不弹出“不可用”提示。
+  assert.deepEqual(selectedRuntime, { model: DIRTY_MODEL, thinkingLevel: "high" });
+  assert.deepEqual(context.notifications, []);
+});
+
+// 目录快照用 available 模型的 { provider, id } 形状，配置候选用 { provider, modelId }。
+const RACE_MODELS = [
+  { provider: "race-primary", id: "race-primary-model" },
+  { provider: "race-fallback", id: "race-fallback-model" },
+  { provider: "race-fallback-two", id: "race-fallback-two-model" },
+];
+const raceOverride = (model: { provider: string; id: string }) => ({
+  provider: model.provider,
+  modelId: model.id,
+});
+test("fresh settings keep the remaining chain when the default disappears while the menu is open", async () => {
+  let selectedRuntime: unknown;
+  let availableReads = 0;
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    thinkingLevel: "medium",
+    modelRegistry: {
+      getAvailable: () => {
+        availableReads += 1;
+        // 菜单打开后首选模型从目录中消失，两个后备候选仍然可用。
+        return availableReads === 1 ? RACE_MODELS : RACE_MODELS.slice(1);
+      },
+    },
+    select: async (title: string) => {
+      if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+      if (title.startsWith("Fresh implementation settings")) return "Start fresh implementation";
+      return undefined;
+    },
+  });
+
+  await showReadyPlanMenu(
+    context.ctx,
+    menuOptions({
+      planThinkingLevel: "medium",
+      implementationDefaults: {
+        model: raceOverride(RACE_MODELS[0]),
+        fallbackModels: [raceOverride(RACE_MODELS[1]), raceOverride(RACE_MODELS[2])],
+        thinkingLevel: "high",
+      },
+      implementFresh: (runtime: unknown) => {
+        selectedRuntime = runtime;
+      },
+    }),
+  );
+
+  // 重新解析后主模型改为首个仍可用的候选，其余候选继续作为后备，而不是退回“与规划相同”。
+  assert.deepEqual(selectedRuntime, {
+    model: raceOverride(RACE_MODELS[1]),
+    fallbackModels: [raceOverride(RACE_MODELS[2])],
+    thinkingLevel: "high",
+  });
+  assert.equal(availableReads, 2);
+  assert.match(context.notifications.at(-1)?.message ?? "", /unavailable; using/iu);
+});

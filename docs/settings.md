@@ -29,10 +29,16 @@ The shortcut is disabled when `toggleShortcut` is omitted.
     "provider": "<plan-provider>",
     "modelId": "<plan-model>"
   },
-  "normalModel": {
-    "provider": "<normal-provider>",
-    "modelId": "<normal-model>"
-  },
+  "normalModel": [
+    {
+      "provider": "<normal-provider>",
+      "modelId": "<normal-model>"
+    },
+    {
+      "provider": "<fallback-provider>",
+      "modelId": "<fallback-model>"
+    }
+  ],
   "defaultPlanExportPath": "PLAN.md",
   "safeSubcommands": {
     "git": ["rev-parse", "blame"],
@@ -43,6 +49,7 @@ The shortcut is disabled when `toggleShortcut` is omitted.
   "toggleShortcut": "<your_key>"
 }
 ```
+`planModel` and `normalModel` also accept a single model object instead of an array; the array form configures ordered fallbacks.
 
 ### Plan helper tools
 
@@ -145,31 +152,37 @@ Conversation-history-only implementation has no active Plan-mode state to show, 
 ### Implementation model and thinking
 
 There are no built-in implementation model or thinking defaults; models come entirely from your configuration.
-`normalModel` (shown as **Plan exit model**) is the single implementation model: with `autoSwitchModel` enabled it is the starting model for every implementation entry point — implement here, fresh session, active plan, or saved plan — and it also seeds the ready-plan **Start fresh and implement** screen.
+`normalModel` (shown as **Plan exit model**) is the implementation model chain: with `autoSwitchModel` enabled its candidates are the starting models for every implementation entry point — implement here, fresh session, active plan, or saved plan — and they also seed the ready-plan **Start fresh and implement** screen.
 Without `autoSwitchModel` or without `normalModel`, no switch happens and implementation keeps the current session model.
-A model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each.
+A model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each; `planModel` and `normalModel` each accept either one such object or a non-empty array of them.
 
 The model picker snapshots the current session's scoped models when a non-empty scope exists, otherwise Pi's currently available models.
-A configured model outside that catalogue remains stored but is ineffective for that handoff: Settings and the ready-plan fresh screen report that it is unavailable and fall back to the current session model.
+Configured candidates outside that catalogue remain stored but are ineffective for that handoff: Settings and the ready-plan fresh screen report that they are unavailable, skip them, and use the next usable candidate.
 The preference becomes effective again if the model returns to the applicable catalogue.
-This fallback also protects a configured default that disappears while the ready-plan fresh screen is open.
+This fallback also protects a configured default that disappears while the ready-plan fresh screen is open: pressing Start re-resolves the remaining chain, keeps the candidates that are still usable, and reports the switch; only a fully unavailable chain falls back to the planning model.
 Authentication and one-shot model races still use the normal fresh-handoff preflight and recovery behavior.
 
-The fresh screen's choices are one-shot menu values: the model row starts from `normalModel`, the thinking row starts from the current thinking level, and neither choice is written back to Settings.
-The saved-plan direct fresh action applies the same initial values without an extra picker and warns when the configured model falls back.
+The fresh screen's choices are one-shot menu values: the model row starts from the first usable `normalModel` candidate and keeps the remaining candidates as fallbacks, the thinking row starts from the current thinking level, and neither choice is written back to Settings.
+Picking a model in that screen replaces the chain for that one session with the picked model.
+The saved-plan direct fresh action applies the same initial values without an extra picker and warns only when no configured candidate can be used.
 Both rows never switch the planning session's current model or thinking level while the menu is open.
 
 ### Auto model switch
 
 `autoSwitchModel` switches the session model at Plan-mode boundaries and is off by default.
 `planModel` is the target when Plan mode starts; `normalModel` is the target when Plan mode ends: Plan exit, plan save, or any implementation start — including implementing a previously saved plan outside Plan mode.
-Each model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each.
+Each of them is one model object or a non-empty array of model objects; a model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each, and array order is the fallback order.
 An omitted model leaves that direction unchanged, and a target that is already active is left untouched.
 
+The configured candidates are tried in order until one is applied. A candidate that cannot be resolved, is outside the current catalogue, fails authentication, is refused by Pi's model change, or throws moves to the next one; duplicate candidates are collapsed to their first position.
+The switch reports one warning: a fallback notification when a later candidate was applied, or one summary warning when every candidate failed and the current model was kept.
+Fallback chains are not retried past a direction: each Plan boundary starts again from the first candidate.
+The settings screen keeps managing one model per direction; editing `pi-plan-mode.json` is what configures and orders a chain, and choosing a model in that screen replaces the chain with that single model.
+
 The switch applies Pi's normal model-change behavior and then restores the current thinking level, so `thinkingLevel`, per-model thinking overrides, and manual thinking changes are unaffected.
-A target outside the current catalogue or without authentication keeps the current model and reports the fallback in a notification; the stored preference is not deleted.
+A candidate outside the current catalogue or without authentication is skipped in favor of the next configured candidate, and a fully failed chain keeps the current model; the stored preference is not deleted.
 Switching completes inside the transition before any request that transition starts, so a first implementation request already uses the selected model.
-Fresh implementation sessions use `normalModel` as their starting model, overridable once in the fresh menu.
+Fresh implementation sessions start from the `normalModel` chain, overridable once in the fresh menu.
 
 Changing these settings applies to later Plan transitions only.
 Invalid values invalidate the settings document like every other field; a settings read failure falls back to no switching.

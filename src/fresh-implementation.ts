@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ImplementationModelOverride, implementationModelFailureSummary } from "./implementation-models.js";
 import { PLAN_HISTORY_IMPLEMENTATION_PROMPT } from "./message-transform.js";
 import { createModeContractMessage } from "./mode-contract.js";
 import type { ImplementationPlanRetention } from "./settings.js";
@@ -104,11 +105,12 @@ export async function startFreshImplementationSession(
 
   await ctx.waitForIdle();
   if (!request.isCurrent()) return { kind: "stale" };
-  if (!(await preflightModel(ctx, request))) return { kind: "rejected" };
+  const preflight = await preflightModel(ctx, request);
+  if (!preflight) return { kind: "rejected" };
   if (!request.isCurrent()) return { kind: "stale" };
 
   const usesConversationHistory = request.retention === "clear-on-start";
-  const pendingImplementationRuntime = pendingRuntimeIntent(request.runtime);
+  const pendingImplementationRuntime = pendingRuntimeIntent(resolvedRuntimeSelection(request.runtime, preflight));
   const activeImplementation = usesConversationHistory
     ? undefined
     : {
@@ -214,13 +216,27 @@ export async function startFreshImplementationSession(
   return setupError || kickoffError ? { kind: "partial" } : { kind: "started" };
 }
 
-async function preflightModel(ctx: ExtensionCommandContext, request: FreshImplementationRequest) {
-  const requestedModel = request.runtime?.model;
-  let model = ctx.model;
-  if (requestedModel) {
+interface FreshModelPreflight {
+  model?: ImplementationModelOverride;
+  fallbackModels: ImplementationModelOverride[];
+}
+
+/**
+ * 源会话先行解析并认证候选链，返回首个通过的候选与其余后备项。
+ * 预检失败不替换源会话；解析、认证任一步失败都继续尝试下一个候选。
+ */
+async function preflightModel(
+  ctx: ExtensionCommandContext,
+  request: FreshImplementationRequest,
+): Promise<FreshModelPreflight | undefined> {
+  const requestedModels = [
+    ...(request.runtime?.model ? [request.runtime.model] : []),
+    ...(request.runtime?.fallbackModels ?? []),
+  ];
+  for (const candidate of requestedModels) {
     if (
-      !isPendingImplementationModelIdentifier(requestedModel.provider) ||
-      !isPendingImplementationModelIdentifier(requestedModel.modelId)
+      !isPendingImplementationModelIdentifier(candidate.provider) ||
+      !isPendingImplementationModelIdentifier(candidate.modelId)
     ) {
       notifyCurrent(
         ctx,
@@ -228,51 +244,79 @@ async function preflightModel(ctx: ExtensionCommandContext, request: FreshImplem
         `Unable to implement the plan: implementation model provider and ID must each contain 1-${MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH} characters. Choose another model and retry.`,
         "warning",
       );
-      return false;
+      return undefined;
     }
-    const isCurrentModel = ctx.model?.provider === requestedModel.provider && ctx.model.id === requestedModel.modelId;
-    if (!isCurrentModel) {
+  }
+  if (requestedModels.length === 0) {
+    const model = ctx.model;
+    if (!model) {
+      notifyCurrent(ctx, request, "Unable to implement the plan: no model is selected.", "warning");
+      return undefined;
+    }
+    const failures: string[] = [];
+    if (await authorizeModel(ctx, model, safeModelReference(model), failures)) return { fallbackModels: [] };
+    if (!request.isCurrent()) return undefined;
+    notifyCurrent(
+      ctx,
+      request,
+      `Unable to implement the plan: ${implementationModelFailureSummary(failures)}.`,
+      "warning",
+    );
+    return undefined;
+  }
+
+  const failures: string[] = [];
+  for (let index = 0; index < requestedModels.length; index += 1) {
+    const candidate = requestedModels[index];
+    const reference = safeModelReference(candidate);
+    const isCurrentModel = ctx.model?.provider === candidate.provider && ctx.model.id === candidate.modelId;
+    let model = isCurrentModel ? ctx.model : undefined;
+    if (!model) {
       try {
-        model = ctx.modelRegistry.find(requestedModel.provider, requestedModel.modelId);
+        model = ctx.modelRegistry.find(candidate.provider, candidate.modelId);
       } catch (error: unknown) {
-        notifyCurrent(ctx, request, `Unable to implement the plan: ${safeErrorDetail(error)}`, "error");
-        return false;
+        failures.push(`${reference}: ${safeErrorDetail(error)}`);
+        continue;
       }
     }
     if (!model) {
-      notifyCurrent(
-        ctx,
-        request,
-        `Unable to implement the plan: implementation model ${safeModelReference(requestedModel)} is no longer available. Choose another model and retry.`,
-        "warning",
-      );
-      return false;
+      failures.push(`implementation model ${reference} is no longer available`);
+      continue;
     }
+    const authorized = await authorizeModel(ctx, model, reference, failures);
+    if (!request.isCurrent()) return undefined;
+    if (!authorized) continue;
+    return {
+      model: { provider: candidate.provider, modelId: candidate.modelId },
+      fallbackModels: requestedModels.slice(index + 1),
+    };
   }
-  if (!model) {
-    notifyCurrent(ctx, request, "Unable to implement the plan: no model is selected.", "warning");
-    return false;
-  }
+  notifyCurrent(
+    ctx,
+    request,
+    `Unable to implement the plan: ${implementationModelFailureSummary(failures)}. Choose another model or configure authentication, then retry.`,
+    "warning",
+  );
+  return undefined;
+}
+
+/** 认证单个候选；失败原因记入 failures。解析异常与认证失败同样视为该候选不可用。 */
+async function authorizeModel(
+  ctx: ExtensionCommandContext,
+  model: NonNullable<ExtensionCommandContext["model"]>,
+  reference: string,
+  failures: string[],
+): Promise<boolean> {
   let auth: Awaited<ReturnType<ExtensionCommandContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
   try {
     auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   } catch (error: unknown) {
-    notifyCurrent(ctx, request, `Unable to implement the plan: ${safeErrorDetail(error)}`, "error");
+    failures.push(`${reference}: ${safeErrorDetail(error)}`);
     return false;
   }
-  if (!request.isCurrent()) return false;
-  if (!auth.ok) {
-    notifyCurrent(
-      ctx,
-      request,
-      requestedModel
-        ? `Unable to implement the plan with ${safeModelReference(model)}: ${safeErrorDetail(auth.error)}. Choose another model or configure authentication, then retry.`
-        : `Unable to implement the plan: ${safeErrorDetail(auth.error)}`,
-      "warning",
-    );
-    return false;
-  }
-  return true;
+  if (auth.ok) return true;
+  failures.push(`implementation model ${reference} could not be authenticated: ${safeErrorDetail(auth.error)}`);
+  return false;
 }
 
 function notifyCurrent(
@@ -284,13 +328,33 @@ function notifyCurrent(
   if (request.isCurrent()) safeNotify(ctx, message, level);
 }
 
+/** 源预检解析后的运行时选择：沿用已解析的候选链与原有思考等级。 */
+function resolvedRuntimeSelection(
+  selection: ImplementationRuntimeSelection | undefined,
+  preflight: FreshModelPreflight,
+): ImplementationRuntimeSelection | undefined {
+  const thinkingLevel = selection?.thinkingLevel;
+  if (!preflight.model && !thinkingLevel) return undefined;
+  return {
+    ...(preflight.model ? { model: preflight.model } : {}),
+    ...(preflight.fallbackModels.length > 0 ? { fallbackModels: preflight.fallbackModels } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+  };
+}
+
 function pendingRuntimeIntent(
   selection: ImplementationRuntimeSelection | undefined,
 ): PendingImplementationRuntime | undefined {
   if (!selection?.model && !selection?.thinkingLevel) return undefined;
+  const fallbackModels = selection.fallbackModels ?? [];
   return {
-    version: 1,
+    version: fallbackModels.length > 0 ? 2 : 1,
     ...(selection.model ? { model: { provider: selection.model.provider, modelId: selection.model.modelId } } : {}),
+    ...(fallbackModels.length > 0
+      ? {
+          fallbackModels: fallbackModels.map((model) => ({ provider: model.provider, modelId: model.modelId })),
+        }
+      : {}),
     ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
   };
 }

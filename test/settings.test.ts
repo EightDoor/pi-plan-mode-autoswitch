@@ -7,6 +7,7 @@ import {
   awaitPlanModeSettingsWrites,
   configuredAutoSwitchModel,
   configuredAutoSwitchModelTarget,
+  configuredAutoSwitchModelTargets,
   configuredImplementationPlanRetention,
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
@@ -224,6 +225,71 @@ test("Plan-mode settings validate and patch auto model switch fields", async () 
       autoSwitchModel: false,
       normalModel,
     });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Plan-mode settings accept an ordered model candidate array", () => {
+  const candidates = [
+    { provider: "openai-codex", modelId: "plan-model" },
+    { provider: "opencode-go", modelId: "fallback-model" },
+  ];
+  const configured = normalizePlanModeSettings({ autoSwitchModel: true, planModel: candidates });
+  assert.ok(configured);
+  assert.deepEqual(configuredAutoSwitchModelTargets(configured, "plan"), candidates);
+  // 兼容接口返回首选，既有单目标调用方行为不变。
+  assert.deepEqual(configuredAutoSwitchModelTarget(configured, "plan"), candidates[0]);
+  assert.deepEqual(configuredAutoSwitchModelTargets(configured, "normal"), []);
+
+  // 重复候选项按首次出现位置去重，避免同一个模型被尝试两次。
+  const deduped = normalizePlanModeSettings({
+    planModel: [candidates[0], { provider: " openai-codex ", modelId: " plan-model " }, candidates[1]],
+  });
+  assert.ok(deduped);
+  assert.deepEqual(configuredAutoSwitchModelTargets(deduped, "plan"), candidates);
+
+  const invalidArrays = [
+    [],
+    [candidates[0], "opencode-go/fallback-model"],
+    [candidates[0], { provider: "", modelId: "fallback-model" }],
+    [candidates[0], { provider: "opencode-go", modelId: "fallback-model", extra: 1 }],
+    [
+      candidates[0],
+      { provider: "opencode-go", modelId: "x".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH + 1) },
+    ],
+  ];
+  for (const planModel of invalidArrays) {
+    assert.equal(normalizePlanModeSettings({ planModel }), undefined);
+  }
+});
+
+test("Plan-mode settings keep a candidate array until a single model replaces it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-auto-switch-candidates-"));
+  try {
+    const settingsPath = join(directory, "pi-plan-mode.json");
+    const candidates = [
+      { provider: "openai-codex", modelId: "plan-model" },
+      { provider: "opencode-go", modelId: "fallback-model" },
+    ];
+    await updatePlanModeSettings({ planModel: candidates }, { settingsPath });
+
+    // 无关设置保存必须原样保留 JSON 数组。
+    await updatePlanModeSettings({ thinkingLevel: "high" }, { settingsPath });
+    assert.deepEqual(
+      (JSON.parse(await readFile(settingsPath, "utf8")) as { planModel: unknown }).planModel,
+      candidates,
+    );
+
+    // 设置界面的单选保存把该方向重置为一个模型。
+    const reset = await updatePlanModeSettings({ planModel: candidates[0] }, { settingsPath });
+    assert.deepEqual(reset.planModel, candidates[0]);
+    assert.deepEqual(
+      (JSON.parse(await readFile(settingsPath, "utf8")) as { planModel: unknown }).planModel,
+      candidates[0],
+    );
+
+    await assert.rejects(updatePlanModeSettings({ planModel: [] }, { settingsPath }), /invalid plan model/u);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

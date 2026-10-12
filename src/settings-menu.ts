@@ -4,7 +4,9 @@ import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
 import {
   type AvailableImplementationModel,
   findAvailableImplementationModel,
+  type ImplementationModelCandidates,
   type ImplementationModelOverride,
+  implementationModelCandidateList,
   snapshotAvailableImplementationModels,
 } from "./implementation-models.js";
 import { retentionLabel } from "./implementation-retention.js";
@@ -200,6 +202,7 @@ export async function showPlanModeSettings(
         title: "Plan enter model",
         lines: [
           "Off keeps the current model. The switch applies at Plan mode start when Auto switch model is enabled.",
+          "Choosing a model here replaces this direction with that single model; edit pi-plan-mode.json for ordered fallbacks.",
         ],
         items: autoSwitchModelItems(implementationModels, modelItemIds),
         action: "set-plan-model",
@@ -213,6 +216,7 @@ export async function showPlanModeSettings(
         title: "Plan exit model",
         lines: [
           "Off keeps the current model. The switch applies when Plan mode ends and Auto switch model is enabled.",
+          "Choosing a model here replaces this direction with that single model; edit pi-plan-mode.json for ordered fallbacks.",
         ],
         items: autoSwitchModelItems(implementationModels, modelItemIds),
         action: "set-normal-model",
@@ -458,23 +462,30 @@ function implementationModelItems(
 }
 
 function implementationModelItemId(
-  configured: ImplementationModelOverride | undefined,
+  configured: ImplementationModelCandidates | undefined,
   models: readonly AvailableImplementationModel[],
   itemIds: ReadonlyMap<AvailableImplementationModel, string>,
   fallback: string = "same-as-plan",
 ) {
-  const model = findAvailableImplementationModel(models, configured);
+  // 整条候选链中首个可用模型即该方向的实际首选，用它定位单选高亮。
+  const model = implementationModelCandidateList(configured)
+    .map((candidate) => findAvailableImplementationModel(models, candidate))
+    .find((candidate) => candidate !== undefined);
   return model ? itemIds.get(model) : fallback;
 }
 
 function autoSwitchModelValue(
-  configured: ImplementationModelOverride | undefined,
+  configured: ImplementationModelCandidates | undefined,
   models: readonly AvailableImplementationModel[],
 ) {
-  if (!configured) return "off";
-  return findAvailableImplementationModel(models, configured)
-    ? safeModelReference(configured)
-    : `off · ${safeModelReference(configured)} unavailable`;
+  const candidates = implementationModelCandidateList(configured);
+  if (candidates.length === 0) return "off";
+  const index = candidates.findIndex((candidate) => findAvailableImplementationModel(models, candidate));
+  const primary = candidates[index < 0 ? 0 : index];
+  const remaining = index < 0 ? candidates.length - 1 : candidates.length - index - 1;
+  const fallback = remaining > 0 ? ` · +${remaining} fallback` : "";
+  if (index < 0) return `off · ${safeModelReference(primary)} unavailable${fallback}`;
+  return `${safeModelReference(primary)}${fallback}`;
 }
 
 function autoSwitchModelItems(

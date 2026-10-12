@@ -1,5 +1,11 @@
 # pi-plan-mode-autoswitch
 
+## Unreleased
+
+### Minor Changes
+
+- Allow `planModel` and `normalModel` to be an ordered, non-empty array of model objects in addition to a single object. The candidates are tried in order at every automatic entry point — Plan mode boundaries, implement here, saved-plan implementation, and fresh implementation sessions — until one is applied; a candidate that cannot be resolved, is outside the current catalogue, fails authentication, or is refused by Pi's model change moves to the next one, and duplicate candidates collapse to their first position. A fallback switch reports one warning, and a fully failed chain reports one summary warning while keeping the current model. Single-object configurations keep their existing behavior, and the Settings screen still edits one model per direction: choosing a model there replaces the chain with that single model, so ordered fallbacks are configured in `pi-plan-mode.json`.
+
 ## 0.1.0
 
 ### Minor Changes

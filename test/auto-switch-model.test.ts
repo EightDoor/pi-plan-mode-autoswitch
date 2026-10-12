@@ -254,3 +254,119 @@ test("overlapping transitions serialize so the later switch wins", async () => {
     { provider: NORMAL_MODEL.provider, id: NORMAL_MODEL.modelId },
   ]);
 });
+
+const FALLBACK_MODEL = { provider: "opencode-go", modelId: "fallback-model" };
+
+function warningMessages(context: ReturnType<typeof createMockContext>) {
+  return context.notifications.filter((entry) => entry.level === "warning").map((entry) => entry.message);
+}
+
+function resolveOnly(provider: string) {
+  return (candidate: string, modelId: string) =>
+    candidate === provider ? undefined : { provider: candidate, id: modelId };
+}
+
+test("an unavailable primary candidate falls back to the next configured candidate", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
+  context.ctx.modelRegistry.find = resolveOnly(PLAN_MODEL.provider) as typeof context.ctx.modelRegistry.find;
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.deepEqual(mock.setModels, [{ provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId }]);
+  const warnings = warningMessages(context);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /fell back/u);
+  assert.match(warnings[0] ?? "", /unavailable/u);
+});
+
+test("a candidate that setModel refuses falls back to the next one and restores thinking once", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    // Mirror pi.setModel resetting the thinking level for the new model.
+    mock.rawPi.setThinkingLevel("xhigh");
+    return (model as { provider: string }).provider === PLAN_MODEL.provider ? false : applied;
+  };
+  const initialThinking = mock.thinkingLevel;
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.deepEqual(mock.setModels, [
+    { provider: PLAN_MODEL.provider, id: PLAN_MODEL.modelId },
+    { provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId },
+  ]);
+  assert.equal(mock.thinkingLevel, initialThinking);
+  const warnings = warningMessages(context);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /was not applied/u);
+});
+
+test("a candidate that setModel throws for falls back to the next one", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    if ((model as { provider: string }).provider === PLAN_MODEL.provider) throw new Error("provider offline");
+    return originalSetModel(model);
+  };
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  // setModel 抛错时 Pi 不会记录这次应用，只有后备候选真正生效。
+  assert.deepEqual(mock.setModels, [{ provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId }]);
+  const warnings = warningMessages(context);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /provider offline/u);
+});
+
+test("when every candidate fails the current model is kept with a single warning", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }), {
+    resolveModels: false,
+  });
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.deepEqual(mock.setModels, []);
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
+  const warnings = warningMessages(context);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /kept the current model/u);
+  assert.match(warnings[0] ?? "", /unavailable/u);
+});
+
+test("a candidate that is already the active model succeeds without switching again", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
+  context.ctx.modelRegistry.find = resolveOnly(PLAN_MODEL.provider) as typeof context.ctx.modelRegistry.find;
+  context.ctx.model = { provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId };
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.deepEqual(mock.setModels, []);
+  assert.deepEqual(warningMessages(context), []);
+});
+
+test("a fallback chain preserves terminal sanitization across both directions", async () => {
+  const { mock, context } = createHarness(
+    autoSwitchSettings({
+      planModel: [
+        { provider: "openai-codex", modelId: `plan${ESC}[31m-model` },
+        { provider: "opencode-go", modelId: `fallback${ESC}[32m-model` },
+      ],
+    }),
+    { resolveModels: false },
+  );
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  const warnings = warningMessages(context);
+  assert.equal(warnings.length, 1);
+  for (const entry of context.notifications) {
+    assert.ok(!entry.message.includes(ESC), `notification leaked a control character: ${entry.message}`);
+  }
+});

@@ -4,7 +4,12 @@ import { lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
-import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
+import {
+  type ImplementationModelCandidates,
+  type ImplementationModelOverride,
+  implementationModelCandidateList,
+  isPendingImplementationModelIdentifier,
+} from "./implementation-models.js";
 import type { SafeSubcommands } from "./tool-policy.js";
 
 export const PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
@@ -87,8 +92,8 @@ export interface PlanModeSettings {
   defaultPlanTools?: string[];
   implementationPlanRetention?: ImplementationPlanRetention;
   autoSwitchModel?: boolean;
-  planModel?: ImplementationModelOverride;
-  normalModel?: ImplementationModelOverride;
+  planModel?: ImplementationModelCandidates;
+  normalModel?: ImplementationModelCandidates;
   defaultPlanExportPath?: string;
   safeSubcommands?: SafeSubcommands;
   toggleShortcut?: KeyId;
@@ -98,8 +103,8 @@ export interface PlanModeSettingsPatch {
   defaultPlanTools?: readonly string[] | null;
   implementationPlanRetention?: ImplementationPlanRetention;
   autoSwitchModel?: boolean;
-  planModel?: ImplementationModelOverride | null;
-  normalModel?: ImplementationModelOverride | null;
+  planModel?: ImplementationModelCandidates | null;
+  normalModel?: ImplementationModelCandidates | null;
   defaultPlanExportPath?: string | null;
   toggleShortcut?: KeyId | null;
 }
@@ -132,7 +137,7 @@ function legacyPlanModeSettingsPath() {
 
 export function normalizePlanModeSettings(value: unknown): PlanModeSettings | undefined {
   if (!isSettingsDocument(value)) return undefined;
-  const thinkingLevel = Object.hasOwn(value, "thinkingLevel") ? Reflect.get(value, "thinkingLevel") : "inherit";
+  const thinkingLevel = Object.hasOwn(value, "thinkingLevel") ? value.thinkingLevel : "inherit";
   if (!PLAN_MODE_THINKING_LEVELS.includes(thinkingLevel as PlanModeThinkingLevel)) {
     return undefined;
   }
@@ -140,44 +145,44 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
     thinkingLevel: thinkingLevel as PlanModeThinkingLevel,
   };
   if (Object.hasOwn(value, "defaultPlanTools")) {
-    const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
+    const defaultPlanTools = normalizeToolNames(value.defaultPlanTools);
     if (!defaultPlanTools) return undefined;
     settings.defaultPlanTools = defaultPlanTools;
   }
   if (Object.hasOwn(value, "implementationPlanRetention")) {
-    const implementationPlanRetention = Reflect.get(value, "implementationPlanRetention");
+    const implementationPlanRetention = value.implementationPlanRetention;
     if (!IMPLEMENTATION_PLAN_RETENTIONS.includes(implementationPlanRetention as ImplementationPlanRetention)) {
       return undefined;
     }
     settings.implementationPlanRetention = implementationPlanRetention as ImplementationPlanRetention;
   }
   if (Object.hasOwn(value, "autoSwitchModel")) {
-    const autoSwitchModel = Reflect.get(value, "autoSwitchModel");
+    const autoSwitchModel = value.autoSwitchModel;
     if (typeof autoSwitchModel !== "boolean") return undefined;
     settings.autoSwitchModel = autoSwitchModel;
   }
   if (Object.hasOwn(value, "planModel")) {
-    const planModel = normalizeImplementationModel(Reflect.get(value, "planModel"));
+    const planModel = normalizeImplementationModelCandidates(value.planModel);
     if (!planModel) return undefined;
     settings.planModel = planModel;
   }
   if (Object.hasOwn(value, "normalModel")) {
-    const normalModel = normalizeImplementationModel(Reflect.get(value, "normalModel"));
+    const normalModel = normalizeImplementationModelCandidates(value.normalModel);
     if (!normalModel) return undefined;
     settings.normalModel = normalModel;
   }
   if (Object.hasOwn(value, "defaultPlanExportPath")) {
-    const defaultPlanExportPath = normalizePlanExportPath(Reflect.get(value, "defaultPlanExportPath"));
+    const defaultPlanExportPath = normalizePlanExportPath(value.defaultPlanExportPath);
     if (!defaultPlanExportPath) return undefined;
     settings.defaultPlanExportPath = defaultPlanExportPath;
   }
   if (Object.hasOwn(value, "toggleShortcut")) {
-    const toggleShortcut = normalizeKeyId(Reflect.get(value, "toggleShortcut"));
+    const toggleShortcut = normalizeKeyId(value.toggleShortcut);
     if (!toggleShortcut) return undefined;
     settings.toggleShortcut = toggleShortcut;
   }
   if (Object.hasOwn(value, "safeSubcommands")) {
-    const safeSubcommands = normalizeSafeSubcommands(Reflect.get(value, "safeSubcommands"));
+    const safeSubcommands = normalizeSafeSubcommands(value.safeSubcommands);
     if (!safeSubcommands) return undefined;
     settings.safeSubcommands = safeSubcommands;
   }
@@ -194,6 +199,22 @@ function normalizeImplementationModel(value: unknown): ImplementationModelOverri
     return undefined;
   }
   return { provider, modelId };
+}
+
+/** 数组候选项按首次出现位置去重；空数组视为无效配置。 */
+function normalizeImplementationModelCandidates(value: unknown): ImplementationModelCandidates | undefined {
+  if (!Array.isArray(value)) return normalizeImplementationModel(value);
+  if (value.length === 0) return undefined;
+  const candidates: ImplementationModelOverride[] = [];
+  for (const item of value) {
+    const model = normalizeImplementationModel(item);
+    if (!model) return undefined;
+    const duplicate = candidates.some(
+      (candidate) => candidate.provider === model.provider && candidate.modelId === model.modelId,
+    );
+    if (!duplicate) candidates.push(model);
+  }
+  return candidates;
 }
 
 function normalizeToolNames(value: unknown) {
@@ -315,13 +336,13 @@ export function updatePlanModeSettings(
     if (patch.autoSwitchModel !== undefined) updated.autoSwitchModel = patch.autoSwitchModel;
     if (patch.planModel === null) delete updated.planModel;
     else if (patch.planModel !== undefined) {
-      const model = normalizeImplementationModel(patch.planModel);
+      const model = normalizeImplementationModelCandidates(patch.planModel);
       if (!model) throw invalidSettingsError(settingsPath, "invalid plan model");
       updated.planModel = model;
     }
     if (patch.normalModel === null) delete updated.normalModel;
     else if (patch.normalModel !== undefined) {
-      const model = normalizeImplementationModel(patch.normalModel);
+      const model = normalizeImplementationModelCandidates(patch.normalModel);
       if (!model) throw invalidSettingsError(settingsPath, "invalid normal model");
       updated.normalModel = model;
     }
@@ -511,9 +532,18 @@ export function configuredAutoSwitchModel(settings: PlanModeSettings): boolean {
   return settings.autoSwitchModel === true;
 }
 
+/** 该方向的首选模型；用于单选摘要与兼容既有单目标调用方。 */
 export function configuredAutoSwitchModelTarget(
   settings: PlanModeSettings,
   direction: "plan" | "normal",
 ): ImplementationModelOverride | undefined {
-  return direction === "plan" ? settings.planModel : settings.normalModel;
+  return configuredAutoSwitchModelTargets(settings, direction)[0];
+}
+
+/** 该方向按优先级排列的完整候选链。 */
+export function configuredAutoSwitchModelTargets(
+  settings: PlanModeSettings,
+  direction: "plan" | "normal",
+): ImplementationModelOverride[] {
+  return implementationModelCandidateList(direction === "plan" ? settings.planModel : settings.normalModel);
 }
