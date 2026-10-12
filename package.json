@@ -1,6 +1,6 @@
 {
   "name": "pi-plan-mode-autoswitch",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "description": "Pi Plan Mode with optional automatic model switching at Plan boundaries (entry / exit).",
   "type": "module",
   "license": "MIT",
