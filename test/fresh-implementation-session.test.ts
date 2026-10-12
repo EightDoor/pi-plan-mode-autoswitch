@@ -262,10 +262,12 @@ test("saved plans can start fresh without consuming the source session state", a
       settings: {
         thinkingLevel: "inherit" as const,
         autoSwitchModel: true as const,
-        normalModel: {
-          provider: target.provider,
-          modelId: target.id,
-        },
+        normalModel: [
+          {
+            provider: target.provider,
+            modelId: target.id,
+          },
+        ],
       },
     }),
   });
@@ -352,7 +354,7 @@ test("saved plans can start fresh without consuming the source session state", a
     pendingImplementationRuntime: {
       version: 1,
       model: { provider: target.provider, modelId: target.id },
-      thinkingLevel: "high",
+      inheritedThinkingLevel: "high",
     },
   });
   assert.deepEqual(destination.setModels, [target]);

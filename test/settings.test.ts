@@ -160,10 +160,12 @@ test("Plan-mode settings ignore removed fresh implementation runtime fields", ()
   // 实施模型统一来自 normalModel，且仅在 autoSwitchModel 开启时作为 fresh 默认。
   const configured = normalizePlanModeSettings({
     autoSwitchModel: true,
-    normalModel: {
-      provider: "  provider  ",
-      modelId: `  ${"m".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH)}  `,
-    },
+    normalModel: [
+      {
+        provider: "  provider  ",
+        modelId: `  ${"m".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH)}  `,
+      },
+    ],
   });
   assert.ok(configured);
   assert.ok(configuredAutoSwitchModel(configured));
@@ -176,21 +178,29 @@ test("Plan-mode settings ignore removed fresh implementation runtime fields", ()
   assert.ok(defaults);
   assert.equal(configuredAutoSwitchModel(defaults), false);
   assert.equal(configuredAutoSwitchModelTarget(defaults, "normal"), undefined);
+  // 单对象形态已废弃，连同空值一起直接判无效。
   for (const normalModel of [
     null,
     "provider/model",
     {},
+    { provider: "provider", modelId: "model" },
     { provider: "", modelId: "model" },
     { provider: "provider", modelId: " " },
     { provider: "provider", modelId: "model", extra: true },
-    { provider: "provider", modelId: "x".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH + 1) },
+    [{ provider: "provider", modelId: "x".repeat(MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH + 1) }],
+    [{ provider: "provider", modelId: "model", thinkingLevel: "extreme" }],
+    [{ provider: "provider", modelId: "model", thinkingLevel: 1 }],
   ]) {
     assert.equal(normalizePlanModeSettings({ normalModel }), undefined);
   }
+  assert.deepEqual(
+    normalizePlanModeSettings({ normalModel: [{ provider: " provider ", modelId: " model ", thinkingLevel: "high" }] }),
+    { thinkingLevel: "inherit", normalModel: [{ provider: "provider", modelId: "model", thinkingLevel: "high" }] },
+  );
 });
 test("Plan-mode settings validate and patch auto model switch fields", async () => {
-  const planModel = { provider: "openai-codex", modelId: "plan-model" };
-  const normalModel = { provider: "xiaomi-token-plan-cn", modelId: "normal-model" };
+  const planModel = [{ provider: "openai-codex", modelId: "plan-model", thinkingLevel: "high" }];
+  const normalModel = [{ provider: "xiaomi-token-plan-cn", modelId: "normal-model" }];
   assert.deepEqual(normalizePlanModeSettings({ autoSwitchModel: true, planModel, normalModel }), {
     thinkingLevel: "inherit",
     autoSwitchModel: true,
@@ -204,8 +214,11 @@ test("Plan-mode settings validate and patch auto model switch fields", async () 
   assert.equal(normalizePlanModeSettings({ autoSwitchModel: "yes" }), undefined);
   assert.equal(normalizePlanModeSettings({ planModel: "openai-codex/plan-model" }), undefined);
   assert.equal(normalizePlanModeSettings({ planModel: { provider: "", modelId: "plan-model" } }), undefined);
+  assert.equal(normalizePlanModeSettings({ planModel: [] }), undefined);
   assert.equal(
-    normalizePlanModeSettings({ normalModel: { provider: "xiaomi-token-plan-cn", modelId: "normal-model", extra: 1 } }),
+    normalizePlanModeSettings({
+      normalModel: [{ provider: "xiaomi-token-plan-cn", modelId: "normal-model", extra: 1 }],
+    }),
     undefined,
   );
 
@@ -214,7 +227,7 @@ test("Plan-mode settings validate and patch auto model switch fields", async () 
     const settingsPath = join(directory, "pi-plan-mode.json");
     await writeFile(
       settingsPath,
-      '{"autoSwitchModel":true,"planModel":{"provider":"openai-codex","modelId":"plan-model"}}\n',
+      '{"autoSwitchModel":true,"planModel":[{"provider":"openai-codex","modelId":"plan-model"}]}\n',
     );
     const saved = await updatePlanModeSettings(
       { autoSwitchModel: false, planModel: null, normalModel },
@@ -242,12 +255,19 @@ test("Plan-mode settings accept an ordered model candidate array", () => {
   assert.deepEqual(configuredAutoSwitchModelTarget(configured, "plan"), candidates[0]);
   assert.deepEqual(configuredAutoSwitchModelTargets(configured, "normal"), []);
 
-  // 重复候选项按首次出现位置去重，避免同一个模型被尝试两次。
   const deduped = normalizePlanModeSettings({
-    planModel: [candidates[0], { provider: " openai-codex ", modelId: " plan-model " }, candidates[1]],
+    planModel: [
+      { ...candidates[0], thinkingLevel: "xhigh" },
+      { provider: " openai-codex ", modelId: " plan-model " },
+      candidates[1],
+    ],
   });
   assert.ok(deduped);
-  assert.deepEqual(configuredAutoSwitchModelTargets(deduped, "plan"), candidates);
+  // 重复项按首次出现位置去重，首次出现项绑定的思考等级一并保留。
+  assert.deepEqual(configuredAutoSwitchModelTargets(deduped, "plan"), [
+    { ...candidates[0], thinkingLevel: "xhigh" },
+    candidates[1],
+  ]);
 
   const invalidArrays = [
     [],
@@ -264,7 +284,7 @@ test("Plan-mode settings accept an ordered model candidate array", () => {
   }
 });
 
-test("Plan-mode settings keep a candidate array until a single model replaces it", async () => {
+test("Plan-mode settings keep a candidate array until a single-element array replaces it", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-auto-switch-candidates-"));
   try {
     const settingsPath = join(directory, "pi-plan-mode.json");
@@ -281,12 +301,16 @@ test("Plan-mode settings keep a candidate array until a single model replaces it
       candidates,
     );
 
-    // 设置界面的单选保存把该方向重置为一个模型。
-    const reset = await updatePlanModeSettings({ planModel: candidates[0] }, { settingsPath });
-    assert.deepEqual(reset.planModel, candidates[0]);
-    assert.deepEqual(
-      (JSON.parse(await readFile(settingsPath, "utf8")) as { planModel: unknown }).planModel,
+    // 设置界面的单选保存把该方向重置为单元素数组。
+    const reset = await updatePlanModeSettings({ planModel: [candidates[0]] }, { settingsPath });
+    assert.deepEqual(reset.planModel, [candidates[0]]);
+    assert.deepEqual((JSON.parse(await readFile(settingsPath, "utf8")) as { planModel: unknown }).planModel, [
       candidates[0],
+    ]);
+    // 单对象形态不再被接受。
+    await assert.rejects(
+      updatePlanModeSettings({ planModel: candidates[0] as never }, { settingsPath }),
+      /invalid plan model/u,
     );
 
     await assert.rejects(updatePlanModeSettings({ planModel: [] }, { settingsPath }), /invalid plan model/u);

@@ -1,21 +1,23 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { PlanModeFixedThinkingLevel } from "./settings.js";
 
 export const MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH = 512;
 
 export interface ImplementationModelOverride {
   provider: string;
   modelId: string;
+  /** 该候选项独占的思考等级；缺省时沿用切换前等级。 */
+  thinkingLevel?: PlanModeFixedThinkingLevel;
 }
 
-/** 单个模型，或按优先级排列的候选列表；数组顺序即该方向的回退顺序。 */
-export type ImplementationModelCandidates = ImplementationModelOverride | ImplementationModelOverride[];
+/** 按优先级排列的候选列表；数组顺序即该方向的回退顺序，单对象形态已废弃。 */
+export type ImplementationModelCandidates = ImplementationModelOverride[];
 
 /** 展开候选配置为有序列表；未配置时为空数组。 */
 export function implementationModelCandidateList(
   value: ImplementationModelCandidates | undefined,
 ): ImplementationModelOverride[] {
-  if (!value) return [];
-  return Array.isArray(value) ? [...value] : [value];
+  return value ? [...value] : [];
 }
 
 /** 汇总候选失败原因；单条通知必须有界，所以按码点截断。 */

@@ -80,6 +80,7 @@ import {
   configuredPlanModeToggleShortcut,
   configuredThinkingLevel,
   type ImplementationPlanRetention,
+  type PlanModeFixedThinkingLevel,
   type PlanModeSettings,
   type PlanModeSettingsPatch,
   planModeSettingsPath,
@@ -1169,6 +1170,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
               ? { fallbackModels: runtime.fallbackModels.map((model) => ({ ...model })) }
               : {}),
             ...(runtime.thinkingLevel ? { thinkingLevel: runtime.thinkingLevel } : {}),
+            ...(runtime.inheritedThinkingLevel ? { inheritedThinkingLevel: runtime.inheritedThinkingLevel } : {}),
           }
         : undefined,
       menuIsCurrent,
@@ -1743,23 +1745,25 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         const pendingState = state;
         const previousThinkingLevel = pi.getThinkingLevel();
 
+        let appliedCandidate: ImplementationModelOverride | undefined;
         const applyThinking = () => {
-          if (!intent.thinkingLevel) return;
+          // 优先级：一次性显式选择 > 最终成功候选绑定等级 > 继承的规划等级；全都没有才保持目标会话默认。
+          const target = intent.thinkingLevel ?? appliedCandidate?.thinkingLevel ?? intent.inheritedThinkingLevel;
+          if (!target) return;
           try {
-            pi.setThinkingLevel(intent.thinkingLevel);
+            pi.setThinkingLevel(target);
             const effectiveLevel = pi.getThinkingLevel();
-            if (effectiveLevel !== intent.thinkingLevel) {
+            if (effectiveLevel !== target) {
               notifyCurrent(
-                `Implementation thinking ${intent.thinkingLevel} is unsupported by the destination model; Pi is using ${effectiveLevel}.`,
+                `Implementation thinking ${target} is unsupported by the destination model; Pi is using ${effectiveLevel}.`,
               );
             }
           } catch (error: unknown) {
             notifyCurrent(
-              `Implementation thinking ${intent.thinkingLevel} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default will continue.`,
+              `Implementation thinking ${target} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default will continue.`,
             );
           }
         };
-
         if (intent.model) {
           // 候选链按声明顺序尝试：解析、认证、应用任一环节失败都进入下一个候选。
           const candidates = [intent.model, ...(intent.fallbackModels ?? [])];
@@ -1807,6 +1811,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
               failures.push(`${reference} could not be applied`);
               continue;
             }
+            appliedCandidate = candidate;
             appliedReference = reference;
           }
           if (appliedReference && failures.length > 0) {
@@ -1944,7 +1949,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       const session = ctx.sessionManager;
       const generationAtStart = workflowGeneration;
       const menuGenerationAtStart = menuGeneration;
-      const thinkingLevel = pi.getThinkingLevel();
+      const preSwitchThinkingLevel = pi.getThinkingLevel();
       // The session may be replaced or closed, or another transition may advance the workflow while setModel
       // awaits; afterwards the captured ctx and thinking snapshot are stale and no notification may be sent.
       const stale = () =>
@@ -1952,71 +1957,100 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         workflowGeneration !== generationAtStart ||
         menuGeneration !== menuGenerationAtStart;
       const failures: string[] = [];
-      try {
-        for (const target of candidates) {
-          if (stale()) return;
-          // Settings validation does not reject control characters; sanitize before any notification.
-          const targetReference = terminalModelReference(target);
-          const current = ctx.model;
-          // 目标已经是当前模型：该候选视为成功，无需重复切换。
-          if (current && current.provider === target.provider && current.id === target.modelId) return;
-          let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
-          try {
-            model = ctx.modelRegistry.find(target.provider, target.modelId);
-          } catch (error: unknown) {
-            failures.push(`${targetReference} could not be resolved: ${terminalErrorDetail(error)}`);
-            continue;
-          }
-          if (!model) {
-            failures.push(`${targetReference} is unavailable`);
-            continue;
-          }
-          // 认证探测只为给候选加 2 秒上限：只有超时才按失败处理并继续下一个。
-          // 解析失败（ok:false 或抛错）不作为拦截依据，交给 pi.setModel 按「凭证是否已配置」判定，
-          // 否则一次瞬时解析故障会让本该生效的候选被跳过。
-          // 恢复/回滚（targetOverride）整体跳过探测：它只有刚生效过的模型一个候选，超时被跳过
-          // 会把会话留在切换后的模型上，而该模型的认证几秒前刚刚成功解析过。
-          if (!targetOverride) {
-            try {
-              await withImplementationModelAuthTimeout(() => ctx.modelRegistry.getApiKeyAndHeaders(model));
-            } catch (error: unknown) {
-              if (stale()) return;
-              if (isImplementationModelAuthTimeoutError(error)) {
-                failures.push(`${targetReference} could not be authenticated: ${terminalErrorDetail(error)}`);
-                continue;
-              }
-            }
-            if (stale()) return;
-          }
-          let applied = false;
-          try {
-            applied = await pi.setModel(model);
-          } catch (error: unknown) {
-            if (stale()) return;
-            failures.push(`${targetReference} failed: ${terminalErrorDetail(error)}`);
-            continue;
-          }
-          if (stale()) return;
-          if (!applied) {
-            failures.push(`${targetReference} was not applied`);
-            continue;
-          }
-          if (failures.length > 0) {
-            ctx.ui.notify(
-              `Auto model switch (${direction}) fell back to ${targetReference} because: ${implementationModelFailureSummary(failures)}`,
-              "warning",
-            );
-          }
-          return;
+      let appliedTarget: ImplementationModelOverride | undefined;
+      let setModelRan = false;
+      // 不再套内层 try/catch：切换块内的异常直接交给外层 catch，统一发一条 warning，
+      // 避免恢复 thinkingLevel 失败时静默把会话留在错误等级上。
+      for (const target of candidates) {
+        if (stale()) return;
+        // Settings validation does not reject control characters; sanitize before any notification.
+        const targetReference = terminalModelReference(target);
+        const current = ctx.model;
+        // 目标已经是当前模型：该候选视为成功，无需重复切换。
+        if (current && current.provider === target.provider && current.id === target.modelId) {
+          appliedTarget = target;
+          break;
         }
-        if (!stale()) {
+        let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+        try {
+          model = ctx.modelRegistry.find(target.provider, target.modelId);
+        } catch (error: unknown) {
+          failures.push(`${targetReference} could not be resolved: ${terminalErrorDetail(error)}`);
+          continue;
+        }
+        if (!model) {
+          failures.push(`${targetReference} is unavailable`);
+          continue;
+        }
+        // 认证探测只为给候选加 2 秒上限：只有超时才按失败处理并继续下一个。
+        // 解析失败（ok:false 或抛错）不作为拦截依据，交给 pi.setModel 按「凭证是否已配置」判定，
+        // 否则一次瞬时解析故障会让本该生效的候选被跳过。
+        // 恢复/回滚（targetOverride）整体跳过探测：它只有刚生效过的模型一个候选，超时被跳过
+        // 会把会话留在切换后的模型上，而该模型的认证几秒前刚刚成功解析过。
+        if (!targetOverride) {
+          try {
+            await withImplementationModelAuthTimeout(() => ctx.modelRegistry.getApiKeyAndHeaders(model));
+          } catch (error: unknown) {
+            if (stale()) return;
+            if (isImplementationModelAuthTimeoutError(error)) {
+              failures.push(`${targetReference} could not be authenticated: ${terminalErrorDetail(error)}`);
+              continue;
+            }
+          }
+          if (stale()) return;
+        }
+        let applied = false;
+        try {
+          applied = await pi.setModel(model);
+        } catch (error: unknown) {
+          if (stale()) return;
+          failures.push(`${targetReference} failed: ${terminalErrorDetail(error)}`);
+          continue;
+        }
+        if (stale()) return;
+        if (!applied) {
+          failures.push(`${targetReference} was not applied`);
+          continue;
+        }
+        appliedTarget = target;
+        setModelRan = true;
+        break;
+      }
+      if (stale()) return;
+      if (appliedTarget) {
+        if (setModelRan && failures.length > 0) {
           ctx.ui.notify(
-            `Auto model switch (${direction}) kept the current model because: ${implementationModelFailureSummary(failures)}`,
+            `Auto model switch (${direction}) fell back to ${terminalModelReference(appliedTarget)} because: ${implementationModelFailureSummary(failures)}`,
             "warning",
           );
         }
-      } finally {
-        if (!stale() && pi.getThinkingLevel() !== thinkingLevel) pi.setThinkingLevel(thinkingLevel);
+        // 候选显式等级优先于原等级；无显式等级时若 setModel 真的切换过则恢复原等级，
+        // 已匹配当前模型且无显式等级则保持现状。
+        const desired = appliedTarget.thinkingLevel;
+        if (desired) {
+          try {
+            pi.setThinkingLevel(desired);
+          } catch (error: unknown) {
+            ctx.ui.notify(
+              `Auto model switch (${direction}) could not set thinking level ${desired}: ${terminalErrorDetail(error)}`,
+              "warning",
+            );
+          }
+          const effective = pi.getThinkingLevel();
+          if (effective !== desired) {
+            ctx.ui.notify(
+              `Auto model switch (${direction}) requested thinking level ${desired} but Pi is using ${effective}.`,
+              "warning",
+            );
+          }
+        } else if (setModelRan && pi.getThinkingLevel() !== preSwitchThinkingLevel) {
+          pi.setThinkingLevel(preSwitchThinkingLevel);
+        }
+      } else {
+        ctx.ui.notify(
+          `Auto model switch (${direction}) kept the current model because: ${implementationModelFailureSummary(failures)}`,
+          "warning",
+        );
       }
     } catch (error: unknown) {
       // The helper must never reject: mode transitions await it directly.

@@ -372,17 +372,20 @@ Plan mode 不会识别、检查、配置、启动、停止或依赖其他扩展�
   "thinkingLevel": "inherit",
   "implementationPlanRetention": "clear-on-start",
   "autoSwitchModel": true,
-  "planModel": { "provider": "<plan-provider>", "modelId": "<plan-model>" },
+  "planModel": [
+    { "provider": "<plan-provider>", "modelId": "<plan-model>", "thinkingLevel": "high" },
+    { "provider": "<plan-fallback-provider>", "modelId": "<plan-fallback-model>" }
+  ],
   "normalModel": [
-    { "provider": "<normal-provider>", "modelId": "<normal-model>" },
-    { "provider": "<fallback-provider>", "modelId": "<fallback-model>" }
+    { "provider": "<normal-provider>", "modelId": "<normal-model>", "thinkingLevel": "xhigh" },
+    { "provider": "<fallback-provider>", "modelId": "<fallback-model>", "thinkingLevel": "high" }
   ],
   "defaultPlanExportPath": "PLAN.md"
 }
 ```
 
 默认情况下，Plan 模式继承思考深度，允许激活中的安全内置工具，导出到 `PLAN.md`，并在实施开始后依赖普通对话历史。
-模型完全由用户配置决定，扩展不内置任何实施模型默认值：启用 `autoSwitchModel` 后，进入/退出 Plan 以及任何实施入口（活动方案、已保存方案、此处实施、全新会话实施）都统一切到 `normalModel`，思考深度保持当前等级；未启用或未配置 `normalModel` 时不切换。`planModel` 与 `normalModel` 都可写成单个模型对象，或写成非空数组按顺序回退：某个候选无法解析、不在当前目录、认证失败、认证超过 2 秒或被 Pi 拒绝时自动尝试下一个，只有整条链都失败才保留当前模型；后备成功或全部失败各只给一条警告。2 秒是每个候选各自的认证预算，超时不取消底层认证、只丢弃其稍后结果，因此不会被慢的首选模型抢回已生效的后备模型；`pi.setModel()` 没有可取消 API，认证通过后卡住的切换仍无法中断。认证失败（`ok:false` 或抛错）不跳过候选，仍交给 Pi 的模型切换按「凭证是否已配置」判定，避免瞬时解析故障误杀本该生效的候选。实施已保存方案会先校验当前会话模型的认证，这一步同样有 2 秒上限但没有后备候选：超时即中止实施并提示，已保存方案保持可实施（会先中止，不会切换）。恢复原模型（Plan 提示发送失败或实施 handoff 失败后的回滚）完全跳过该探测，避免恢复因探测挂起而失败、把会话留在切换后的模型上。
+模型完全由用户配置决定，扩展不内置任何实施模型默认值：启用 `autoSwitchModel` 后，进入/退出 Plan 以及任何实施入口（活动方案、已保存方案、此处实施、全新会话实施）都统一切到 `normalModel` 并应用成功候选绑定的思考等级；未启用或未配置 `normalModel` 时不切换。`planModel` 与 `normalModel` 都是非空模型对象数组，按声明顺序回退：某个候选无法解析、不在当前目录、认证失败、认证超过 2 秒或被 Pi 拒绝时自动尝试下一个，只有整条链都失败才保留当前模型；后备成功或全部失败各只给一条警告。每个条目可携带可选的 `thinkingLevel`（`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`），切换成功后会应用该等级；若整条链都未携带等级，则保留当前思考深度。2 秒是每个候选各自的认证预算，超时不取消底层认证、只丢弃其稍后结果，因此不会被慢的首选模型抢回已生效的后备模型；`pi.setModel()` 没有可取消 API，认证通过后卡住的切换仍无法中断。认证失败（`ok:false` 或抛错）不跳过候选，仍交给 Pi 的模型切换按「凭证是否已配置」判定，避免瞬时解析故障误杀本该生效的候选。实施已保存方案会先校验当前会话模型的认证，这一步同样有 2 秒上限但没有后备候选：超时即中止实施并提示，已保存方案保持可实施（会先中止，不会切换）。恢复原模型（Plan 提示发送失败或实施 handoff 失败后的回滚）完全跳过该探测，避免恢复因探测挂起而失败、把会话留在切换后的模型上。
 快捷键默认禁用；启用、修改或移除后需 `/reload` 或重启 Pi 才生效。
 在此之前，当前快捷键绑定保持不变。
 设置保存会作用于后续流程；激活中的实施保留其已捕获的再注入策略。

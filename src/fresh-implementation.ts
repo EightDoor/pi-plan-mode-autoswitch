@@ -290,9 +290,12 @@ async function preflightModel(
     const authorized = await authorizeModel(ctx, model, reference, failures);
     if (!request.isCurrent()) return undefined;
     if (!authorized) continue;
+    // 保留候选自身的思考等级：成功后 apply 路径会优先沿用，
+    // 一次性的 intent.thinkingLevel 仍然可以覆盖它。
+    const successful: ImplementationModelOverride = { ...candidate };
     return {
-      model: { provider: candidate.provider, modelId: candidate.modelId },
-      fallbackModels: requestedModels.slice(index + 1),
+      model: successful,
+      fallbackModels: requestedModels.slice(index + 1).map((model) => ({ ...model })),
     };
   }
   notifyCurrent(
@@ -339,28 +342,43 @@ function resolvedRuntimeSelection(
   preflight: FreshModelPreflight,
 ): ImplementationRuntimeSelection | undefined {
   const thinkingLevel = selection?.thinkingLevel;
-  if (!preflight.model && !thinkingLevel) return undefined;
+  const inheritedThinkingLevel = selection?.inheritedThinkingLevel;
+  if (!preflight.model && !thinkingLevel && !inheritedThinkingLevel) return undefined;
   return {
     ...(preflight.model ? { model: preflight.model } : {}),
     ...(preflight.fallbackModels.length > 0 ? { fallbackModels: preflight.fallbackModels } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(inheritedThinkingLevel ? { inheritedThinkingLevel } : {}),
   };
 }
 
 function pendingRuntimeIntent(
   selection: ImplementationRuntimeSelection | undefined,
 ): PendingImplementationRuntime | undefined {
-  if (!selection?.model && !selection?.thinkingLevel) return undefined;
+  if (!selection?.model && !selection?.thinkingLevel && !selection?.inheritedThinkingLevel) return undefined;
   const fallbackModels = selection.fallbackModels ?? [];
   return {
     version: fallbackModels.length > 0 ? 2 : 1,
-    ...(selection.model ? { model: { provider: selection.model.provider, modelId: selection.model.modelId } } : {}),
+    ...(selection.model
+      ? {
+          model: {
+            provider: selection.model.provider,
+            modelId: selection.model.modelId,
+            ...(selection.model.thinkingLevel ? { thinkingLevel: selection.model.thinkingLevel } : {}),
+          },
+        }
+      : {}),
     ...(fallbackModels.length > 0
       ? {
-          fallbackModels: fallbackModels.map((model) => ({ provider: model.provider, modelId: model.modelId })),
+          fallbackModels: fallbackModels.map((model) => ({
+            provider: model.provider,
+            modelId: model.modelId,
+            ...(model.thinkingLevel ? { thinkingLevel: model.thinkingLevel } : {}),
+          })),
         }
       : {}),
     ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}),
+    ...(selection.inheritedThinkingLevel ? { inheritedThinkingLevel: selection.inheritedThinkingLevel } : {}),
   };
 }
 

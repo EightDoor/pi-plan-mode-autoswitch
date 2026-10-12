@@ -301,7 +301,16 @@ function createFreshImplementationFlow(
   let selectedModelUsesDefault = selectedModel !== undefined;
   // 未手工改选时整条链按顺序交给实施流程：首个可用候选作主模型，其余作后备。
   let selectedChain = configuredAvailableIndex < 0 ? [] : configuredChain.slice(configuredAvailableIndex);
+  // 一次性 thinking 选择：undefined 表示「未显式改选」，让 apply 路径回退到候选绑定等级。
+  // 显示用的「默认 level」（候选绑定或规划等级）由 selectedThinkingLevelForDisplay 单独计算。
+  // 一次性 thinking 选择：仅当 controller 判定整条链无绑定等级时才会从 runtime 默认继承规划等级；
+  // 链上任一候选绑定了等级时这里是 undefined，让 apply 路径用实际成功候选的等级。
   let selectedThinkingLevel = implementationDefaults?.thinkingLevel;
+  // 当前生效的模型候选（未手工改选 = 重解析后仍可用的首选；改选过 = 用户选中的模型）。
+  const activeConfiguredModel = (): ImplementationModelOverride | undefined =>
+    selectedModelUsesDefault
+      ? configuredChain[configuredAvailableIndex < 0 ? 0 : configuredAvailableIndex]
+      : selectedModel?.model;
   return {
     settingsScreen: () => ({
       kind: "actions" as const,
@@ -331,7 +340,9 @@ function createFreshImplementationFlow(
           id: "implementation-thinking",
           label: "Thinking level",
           description:
-            selectedThinkingLevel ?? (planThinkingLevel ? `${planThinkingLevel} · same as plan` : "Same as plan"),
+            selectedThinkingLevel ??
+            activeConfiguredModel()?.thinkingLevel ??
+            (planThinkingLevel ? `${planThinkingLevel} · same as plan` : "Same as plan"),
           to: "thinking" as const,
         },
       ],
@@ -372,7 +383,7 @@ function createFreshImplementationFlow(
         })),
       ],
       action: "select-thinking" as const,
-      initialItemId: selectedThinkingLevel ?? "same-as-plan",
+      initialItemId: selectedThinkingLevel ?? activeConfiguredModel()?.thinkingLevel ?? "same-as-plan",
       viewportSize: IMPLEMENTATION_THINKING_LEVELS.length + 1,
     }),
     selectModel(itemId: string) {
@@ -421,12 +432,16 @@ function createFreshImplementationFlow(
       else if (selectedModel) chain = [selectedModel.model];
       else if (planModel) chain = [planModel];
       const [model, ...fallbackModels] = chain;
-      const thinkingLevel = selectedThinkingLevel ?? planThinkingLevel;
+      // 一次性 thinking 仅由用户显式改选产生；继承的规划等级走 inheritedThinkingLevel（最低优先级），
+      // 候选绑定等级在 apply 路径按「一次性 > 候选 > 继承」参与裁决，不会被规划等级压掉。
+      const inheritedThinkingLevel = implementationDefaults?.inheritedThinkingLevel ?? planThinkingLevel;
+      const thinkingLevel = selectedThinkingLevel;
       return implementFresh(
         {
           ...(model ? { model: { ...model } } : {}),
           ...(fallbackModels.length > 0 ? { fallbackModels } : {}),
           ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(inheritedThinkingLevel ? { inheritedThinkingLevel } : {}),
         },
         signal,
       );

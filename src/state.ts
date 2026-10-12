@@ -36,7 +36,10 @@ export interface ImplementationRuntimeSelection {
   model?: ImplementationModelOverride;
   /** 在 model 失败后按声明顺序尝试的后备模型。 */
   fallbackModels?: ImplementationModelOverride[];
+  /** 一次性显式选择：最高优先级，覆盖候选绑定等级。 */
   thinkingLevel?: PlanModeFixedThinkingLevel;
+  /** 继承的规划等级：最低优先级，候选无绑定等级时兜底。 */
+  inheritedThinkingLevel?: PlanModeFixedThinkingLevel;
 }
 
 export interface PendingImplementationRuntime extends ImplementationRuntimeSelection {
@@ -159,7 +162,9 @@ function normalizePendingImplementationRuntime(value: unknown): PendingImplement
   if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) return undefined;
   const version = value.version;
   const allowedKeys =
-    version === 2 ? ["version", "model", "fallbackModels", "thinkingLevel"] : ["version", "model", "thinkingLevel"];
+    version === 2
+      ? ["version", "model", "fallbackModels", "thinkingLevel", "inheritedThinkingLevel"]
+      : ["version", "model", "thinkingLevel", "inheritedThinkingLevel"];
   if (Object.keys(value).some((key) => !allowedKeys.includes(key))) return undefined;
   const model = value.model === undefined ? undefined : normalizePendingModel(value.model);
   if (value.model !== undefined && !model) return undefined;
@@ -167,17 +172,24 @@ function normalizePendingImplementationRuntime(value: unknown): PendingImplement
   if (value.fallbackModels !== undefined && !fallbackModels) return undefined;
   const thinkingLevel = value.thinkingLevel === undefined ? undefined : fixedThinkingLevel(value.thinkingLevel);
   if (value.thinkingLevel !== undefined && !thinkingLevel) return undefined;
-  if (!model && !thinkingLevel) return undefined;
+  const inheritedThinkingLevel =
+    value.inheritedThinkingLevel === undefined ? undefined : fixedThinkingLevel(value.inheritedThinkingLevel);
+  if (value.inheritedThinkingLevel !== undefined && !inheritedThinkingLevel) return undefined;
+  if (!model && !thinkingLevel && !inheritedThinkingLevel) return undefined;
   return {
     version: fallbackModels && fallbackModels.length > 0 ? 2 : 1,
     ...(model ? { model } : {}),
     ...(fallbackModels && fallbackModels.length > 0 ? { fallbackModels } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(inheritedThinkingLevel ? { inheritedThinkingLevel } : {}),
   };
 }
 
 function normalizePendingModel(value: unknown): ImplementationModelOverride | undefined {
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "provider" && key !== "modelId")) {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => key !== "provider" && key !== "modelId" && key !== "thinkingLevel")
+  ) {
     return undefined;
   }
   if (
@@ -186,7 +198,13 @@ function normalizePendingModel(value: unknown): ImplementationModelOverride | un
   ) {
     return undefined;
   }
-  return { provider: value.provider, modelId: value.modelId };
+  const model: ImplementationModelOverride = { provider: value.provider, modelId: value.modelId };
+  if (value.thinkingLevel !== undefined) {
+    const thinkingLevel = fixedThinkingLevel(value.thinkingLevel);
+    if (!thinkingLevel) return undefined;
+    model.thinkingLevel = thinkingLevel;
+  }
+  return model;
 }
 
 /** v1 一次性状态没有后备链；v2 的后备链必须先有主模型，且去重后非空。 */

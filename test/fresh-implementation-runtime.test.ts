@@ -1242,7 +1242,7 @@ test("source preflight falls back to the next candidate and persists the remaini
     runtime: {
       model: { provider: TARGET.provider, modelId: TARGET.id },
       fallbackModels: [
-        { provider: FALLBACK.provider, modelId: FALLBACK.id },
+        { provider: FALLBACK.provider, modelId: FALLBACK.id, thinkingLevel: "xhigh" as const },
         { provider: FALLBACK_TWO.provider, modelId: FALLBACK_TWO.id },
       ],
       thinkingLevel: "high",
@@ -1253,9 +1253,10 @@ test("source preflight falls back to the next candidate and persists the remaini
   assert.equal(result.kind, "started");
   assert.deepEqual(authModels, [TARGET, FALLBACK]);
   // 首选认证失败后，目标会话从已解析的后备候选开始，并保留其余候选。
+  // 首选认证失败后，目标会话从已解析的后备候选开始，保留其余候选与各候选绑定的思考等级。
   assert.deepEqual((destinationState as { pendingImplementationRuntime?: unknown }).pendingImplementationRuntime, {
     version: 2,
-    model: { provider: FALLBACK.provider, modelId: FALLBACK.id },
+    model: { provider: FALLBACK.provider, modelId: FALLBACK.id, thinkingLevel: "xhigh" },
     fallbackModels: [{ provider: FALLBACK_TWO.provider, modelId: FALLBACK_TWO.id }],
     thinkingLevel: "high",
   });
@@ -1423,4 +1424,40 @@ test("destination falls back when a restored candidate's authentication exceeds 
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("destination applies the successful candidate's thinkingLevel when the runtime has no explicit one", async () => {
+  const branch = [
+    stateEntry({
+      enabled: false,
+      awaitingAction: false,
+      pendingImplementationRuntime: {
+        version: 1,
+        model: { provider: TARGET.provider, modelId: TARGET.id, thinkingLevel: "xhigh" },
+      },
+    }),
+  ];
+  const order: string[] = [];
+  const mock = createMockPi({ thinkingLevel: "low" });
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model) => {
+    order.push("model");
+    return originalSetModel(model);
+  };
+  const originalSetThinking = mock.rawPi.setThinkingLevel.bind(mock.rawPi);
+  mock.rawPi.setThinkingLevel = (level) => {
+    order.push(`thinking:${level}`);
+    originalSetThinking(level);
+  };
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext({
+    sessionManager: { getBranch: () => branch, getEntries: () => branch },
+    modelRegistry: {
+      find: (provider: string, id: string) => (provider === TARGET.provider && id === TARGET.id ? TARGET : undefined),
+      getApiKeyAndHeaders: async () => ({ ok: true as const }),
+    },
+  });
+  await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+  assert.deepEqual(order, ["model", "thinking:xhigh"]);
+  assert.equal(mock.thinkingLevel, "xhigh");
 });

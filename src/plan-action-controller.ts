@@ -66,11 +66,13 @@ export function createPlanActionController(options: PlanActionControllerOptions)
     }
     const currentModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined;
     const models = usableModels.length > 0 ? usableModels : currentModel ? [currentModel] : [];
-    // 目标会话 setModel 会重置思考等级，必须显式带上当前等级才能真正“继承”。
-    const thinkingLevel = options.getThinkingLevel();
+    // 继承的规划等级走独立的 inheritedThinkingLevel 通道（最低优先级）：
+    // 不能放进 thinkingLevel，否则「首选无 level、后备带 level」时规划等级会把后备等级压掉；
+    // 一次性选择仍由菜单单独写入 thinkingLevel。
+    const inheritedThinkingLevel = options.getThinkingLevel();
     return {
       ...implementationRuntimeModelSelection(models),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
+      ...(inheritedThinkingLevel ? { inheritedThinkingLevel } : {}),
     };
   };
   const freshAction = (

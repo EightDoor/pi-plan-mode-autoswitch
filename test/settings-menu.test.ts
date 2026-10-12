@@ -187,10 +187,12 @@ test("Unavailable configured Plan exit models display a sanitized off fallback",
       settingsPath,
       JSON.stringify({
         autoSwitchModel: true,
-        normalModel: {
-          provider: `missing${String.fromCharCode(0x1b)}[31m-provider`,
-          modelId: `missing${String.fromCharCode(0x202e)}-model`,
-        },
+        normalModel: [
+          {
+            provider: `missing${String.fromCharCode(0x1b)}[31m-provider`,
+            modelId: `missing${String.fromCharCode(0x202e)}-model`,
+          },
+        ],
       }),
     );
     const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
@@ -204,9 +206,9 @@ test("Unavailable configured Plan exit models display a sanitized off fallback",
     await running;
     assert.deepEqual(saved, []);
     const persisted = JSON.parse(await readFile(settingsPath, "utf8")) as {
-      normalModel: { modelId: string };
+      normalModel: Array<{ modelId: string }>;
     };
-    assert.equal(persisted.normalModel.modelId, `missing${String.fromCharCode(0x202e)}-model`);
+    assert.equal(persisted.normalModel[0]?.modelId, `missing${String.fromCharCode(0x202e)}-model`);
   });
 });
 
@@ -686,12 +688,16 @@ test("Plan settings summarize an ordered candidate chain and reset it on a singl
       tui.press("tui.select.confirm");
       await tui.waitForPending();
       await tui.waitForOpen();
+      // 跟随新增的思考等级页：选择「Keep current behavior」保持候选不带 level。
+      assert.match(tui.render(160).join("\n"), /Plan exit model thinking/u);
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
 
-      // 单选保存把该方向重置为一个模型，JSON 里的候选链随之消失。
-      assert.deepEqual((JSON.parse(await readFile(settingsPath, "utf8")) as { normalModel: unknown }).normalModel, {
-        provider: "provider-one",
-        modelId: "model-one",
-      });
+      // 单选保存把该方向重置为单元素数组。
+      assert.deepEqual((JSON.parse(await readFile(settingsPath, "utf8")) as { normalModel: unknown }).normalModel, [
+        { provider: "provider-one", modelId: "model-one" },
+      ]);
       const frame = tui.render(160).join("\n");
       assert.match(frame, /Plan exit model\s+model-one \[provider-one\]/u);
       assert.doesNotMatch(frame, /fallback/u);
@@ -721,6 +727,155 @@ test("Plan settings report an unavailable candidate chain with its fallback coun
         tui.render(160).join("\n"),
         /Plan exit model\s+off · missing-model \[missing-provider\] unavailable · \+1 fallback/u,
       );
+    } finally {
+      tui.press("ctrl+c");
+      await running;
+    }
+  });
+});
+
+test("Plan settings save the model with the chosen thinking level on the candidate", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+    const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+    try {
+      await tui.waitForOpen();
+      // Navigate down to the Plan enter model row, open it, move past "Off"
+      // to the first real model, confirm, then choose "xhigh" on the thinking step.
+      for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      // Keep current behavior, off, minimal, low, medium, high, xhigh — land on xhigh.
+      for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      const persisted = JSON.parse(await readFile(settingsPath, "utf8")) as {
+        planModel?: Array<{ provider: string; modelId: string; thinkingLevel?: string }>;
+      };
+      assert.ok(Array.isArray(persisted.planModel));
+      assert.equal(persisted.planModel?.length, 1);
+      assert.equal(persisted.planModel?.[0]?.thinkingLevel, "xhigh");
+    } finally {
+      tui.press("ctrl+c");
+      await running;
+    }
+  });
+});
+
+test("Plan settings choose 'Keep current behavior' to save the model without a bound thinking level", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        autoSwitchModel: true,
+        planModel: [{ provider: "provider-one", modelId: "model-one" }],
+      }),
+    );
+    const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+    try {
+      await tui.waitForOpen();
+      for (let index = 0; index < 6; index += 1) tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      // The first row is "Keep current behavior" — confirm without navigating.
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      const persisted = JSON.parse(await readFile(settingsPath, "utf8")) as {
+        planModel?: Array<{ thinkingLevel?: string }>;
+      };
+      assert.ok(Array.isArray(persisted.planModel));
+      assert.equal(persisted.planModel?.length, 1);
+      assert.equal(persisted.planModel?.[0]?.thinkingLevel, undefined);
+    } finally {
+      tui.press("ctrl+c");
+      await running;
+    }
+  });
+});
+
+test("the thinking step does not lend another candidate's bound level to the selected model", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        autoSwitchModel: true,
+        normalModel: [
+          { provider: "provider-one", modelId: "model-one" },
+          { provider: "provider-two", modelId: "model-two", thinkingLevel: "high" },
+        ],
+      }),
+    );
+    const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+    try {
+      await tui.waitForOpen();
+      // 打开 Plan exit model：初始高亮首个可用候选 model-one（无绑定等级）。
+      for (let index = 0; index < 7; index += 1) tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      // model-one 自身没有绑定等级：不能把链上其他候选的 high 借给它。
+      const frame = tui.render(160).join("\n");
+      assert.match(frame, /→ Keep current behavior/u);
+      assert.doesNotMatch(frame, /→ high/u);
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      const persisted = JSON.parse(await readFile(settingsPath, "utf8")) as { normalModel: unknown };
+      assert.deepEqual(persisted.normalModel, [{ provider: "provider-one", modelId: "model-one" }]);
+    } finally {
+      tui.press("ctrl+c");
+      await running;
+    }
+  });
+});
+
+test("the thinking step preselects the bound level of the model actually selected", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        autoSwitchModel: true,
+        normalModel: [
+          { provider: "provider-one", modelId: "model-one" },
+          { provider: "provider-two", modelId: "model-two", thinkingLevel: "high" },
+        ],
+      }),
+    );
+    const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
+    try {
+      await tui.waitForOpen();
+      for (let index = 0; index < 7; index += 1) tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      // 初始高亮 model-one；下移选中绑定 high 的 model-two。
+      tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      const frame = tui.render(160).join("\n");
+      assert.match(frame, /→ high/u);
+      assert.match(frame, /Current binding/u);
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      const persisted = JSON.parse(await readFile(settingsPath, "utf8")) as { normalModel: unknown };
+      assert.deepEqual(persisted.normalModel, [
+        { provider: "provider-two", modelId: "model-two", thinkingLevel: "high" },
+      ]);
     } finally {
       tui.press("ctrl+c");
       await running;

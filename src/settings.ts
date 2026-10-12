@@ -190,21 +190,26 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 }
 
 function normalizeImplementationModel(value: unknown): ImplementationModelOverride | undefined {
-  if (!isSettingsDocument(value) || Object.keys(value).some((key) => key !== "provider" && key !== "modelId")) {
-    return undefined;
-  }
+  if (!isSettingsDocument(value)) return undefined;
+  const allowedKeys = new Set(["provider", "modelId", "thinkingLevel"]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return undefined;
   const provider = typeof value.provider === "string" ? value.provider.trim() : value.provider;
   const modelId = typeof value.modelId === "string" ? value.modelId.trim() : value.modelId;
   if (!isPendingImplementationModelIdentifier(provider) || !isPendingImplementationModelIdentifier(modelId)) {
     return undefined;
   }
-  return { provider, modelId };
+  const model: ImplementationModelOverride = { provider, modelId };
+  if (Object.hasOwn(value, "thinkingLevel")) {
+    const thinkingLevel = value.thinkingLevel;
+    if (!IMPLEMENTATION_THINKING_LEVELS.includes(thinkingLevel as PlanModeFixedThinkingLevel)) return undefined;
+    model.thinkingLevel = thinkingLevel as PlanModeFixedThinkingLevel;
+  }
+  return model;
 }
 
-/** 数组候选项按首次出现位置去重；空数组视为无效配置。 */
+/** 只接受非空数组，数组候选项按首次出现位置去重；单对象形态已废弃。 */
 function normalizeImplementationModelCandidates(value: unknown): ImplementationModelCandidates | undefined {
-  if (!Array.isArray(value)) return normalizeImplementationModel(value);
-  if (value.length === 0) return undefined;
+  if (!Array.isArray(value) || value.length === 0) return undefined;
   const candidates: ImplementationModelOverride[] = [];
   for (const item of value) {
     const model = normalizeImplementationModel(item);

@@ -143,10 +143,12 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
       getSettings: () => ({
         thinkingLevel: "inherit",
         autoSwitchModel: true,
-        normalModel: {
-          provider: target.provider,
-          modelId: target.id,
-        },
+        normalModel: [
+          {
+            provider: target.provider,
+            modelId: target.id,
+          },
+        ],
       }),
       implementationOutcome: () => "",
       getExportDestination: () => ({ configuredPath: "plan.md", resolvedPath: "/tmp/plan.md" }),
@@ -178,7 +180,7 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
         model: scenario.usesTarget
           ? { provider: target.provider, modelId: target.id }
           : { provider: "planning-provider", modelId: "planning-model" },
-        thinkingLevel: "medium",
+        inheritedThinkingLevel: "medium",
       },
       scenario.name,
     );
@@ -201,7 +203,7 @@ test("saved-plan fresh actions resolve the configured chain to its usable candid
       runtime: {
         model: { provider: CHAIN_PRIMARY.provider, modelId: CHAIN_PRIMARY.id },
         fallbackModels: [{ provider: CHAIN_FALLBACK.provider, modelId: CHAIN_FALLBACK.id }],
-        thinkingLevel: "medium",
+        inheritedThinkingLevel: "medium",
       },
       warns: false,
     },
@@ -210,7 +212,7 @@ test("saved-plan fresh actions resolve the configured chain to its usable candid
       availableModels: [CHAIN_FALLBACK],
       runtime: {
         model: { provider: CHAIN_FALLBACK.provider, modelId: CHAIN_FALLBACK.id },
-        thinkingLevel: "medium",
+        inheritedThinkingLevel: "medium",
       },
       warns: false,
     },
@@ -219,7 +221,7 @@ test("saved-plan fresh actions resolve the configured chain to its usable candid
       availableModels: [],
       runtime: {
         model: { provider: "planning-provider", modelId: "planning-model" },
-        thinkingLevel: "medium",
+        inheritedThinkingLevel: "medium",
       },
       warns: true,
     },

@@ -25,21 +25,29 @@ The shortcut is disabled when `toggleShortcut` is omitted.
   "defaultPlanTools": ["read", "bash", "grep", "find", "ls"],
   "implementationPlanRetention": "clear-on-start",
   "autoSwitchModel": false,
-  "planModel": {
-    "provider": "<plan-provider>",
-    "modelId": "<plan-model>"
-  },
+  "planModel": [
+    {
+      "provider": "<plan-provider>",
+      "modelId": "<plan-model>",
+      "thinkingLevel": "high"
+    },
+    {
+      "provider": "<plan-fallback-provider>",
+      "modelId": "<plan-fallback-model>"
+    }
+  ],
   "normalModel": [
     {
       "provider": "<normal-provider>",
-      "modelId": "<normal-model>"
+      "modelId": "<normal-model>",
+      "thinkingLevel": "xhigh"
     },
     {
       "provider": "<fallback-provider>",
-      "modelId": "<fallback-model>"
+      "modelId": "<fallback-model>",
+      "thinkingLevel": "high"
     }
   ],
-  "defaultPlanExportPath": "PLAN.md",
   "safeSubcommands": {
     "git": ["rev-parse", "blame"],
     "gh": ["pr view", "issue list"],
@@ -50,7 +58,7 @@ The shortcut is disabled when `toggleShortcut` is omitted.
 }
 ```
 `planModel` and `normalModel` also accept a single model object instead of an array; the array form configures ordered fallbacks.
-
+`planModel` and `normalModel` are non-empty arrays of model objects in array form. Each entry accepts an optional `thinkingLevel` (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`); the next Plan-boundary or fresh-implementation switch applies the level of the candidate that succeeds, and a fallback candidate uses its own level.
 ### Plan helper tools
 
 Plan helper schemas are stable from extension registration onward, and Plan mode does not call `setActiveTools()`.
@@ -154,7 +162,7 @@ Conversation-history-only implementation has no active Plan-mode state to show, 
 There are no built-in implementation model or thinking defaults; models come entirely from your configuration.
 `normalModel` (shown as **Plan exit model**) is the implementation model chain: with `autoSwitchModel` enabled its candidates are the starting models for every implementation entry point — implement here, fresh session, active plan, or saved plan — and they also seed the ready-plan **Start fresh and implement** screen.
 Without `autoSwitchModel` or without `normalModel`, no switch happens and implementation keeps the current session model.
-A model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each; `planModel` and `normalModel` each accept either one such object or a non-empty array of them.
+A model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each, and an optional `thinkingLevel` (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`). `planModel` and `normalModel` are each a non-empty array of such objects; the order in the array is the fallback order, and duplicate candidates collapse to their first entry.
 
 The model picker snapshots the current session's scoped models when a non-empty scope exists, otherwise Pi's currently available models.
 Configured candidates outside that catalogue remain stored but are ineffective for that handoff: Settings and the ready-plan fresh screen report that they are unavailable, skip them, and use the next usable candidate.
@@ -162,7 +170,7 @@ The preference becomes effective again if the model returns to the applicable ca
 This fallback also protects a configured default that disappears while the ready-plan fresh screen is open: pressing Start re-resolves the remaining chain, keeps the candidates that are still usable, and reports the switch; only a fully unavailable chain falls back to the planning model.
 Authentication and one-shot model races still use the normal fresh-handoff preflight and recovery behavior, with the same per-candidate two-second authentication budget as the Plan-boundary switch.
 
-The fresh screen's choices are one-shot menu values: the model row starts from the first usable `normalModel` candidate and keeps the remaining candidates as fallbacks, the thinking row starts from the current thinking level, and neither choice is written back to Settings.
+The fresh screen's choices are one-shot menu values: the model row starts from the first usable `normalModel` candidate and keeps the remaining candidates as fallbacks, the thinking row starts from the thinking level bound to that primary candidate (or the current planning level when the candidate has none), and neither choice is written back to Settings. At implementation start the thinking level is resolved in strict priority order — an explicit one-shot pick from the menu, then the bound level of whichever candidate actually succeeds (including a fallback's own level), then the planning level inherited from the source session; only when none of them exists does the destination session keep its own default.
 Picking a model in that screen replaces the chain for that one session with the picked model.
 The saved-plan direct fresh action applies the same initial values without an extra picker and warns only when no configured candidate can be used.
 Both rows never switch the planning session's current model or thinking level while the menu is open.
@@ -171,7 +179,7 @@ Both rows never switch the planning session's current model or thinking level wh
 
 `autoSwitchModel` switches the session model at Plan-mode boundaries and is off by default.
 `planModel` is the target when Plan mode starts; `normalModel` is the target when Plan mode ends: Plan exit, plan save, or any implementation start — including implementing a previously saved plan outside Plan mode.
-Each of them is one model object or a non-empty array of model objects; a model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each, and array order is the fallback order.
+Each of them is a non-empty array of model objects; a model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each and an optional `thinkingLevel` (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`). Array order is the fallback order, and the level bound to the candidate that succeeds is applied to the session after the switch.
 An omitted model leaves that direction unchanged, and a target that is already active is left untouched.
 
 The configured candidates are tried in order until one is applied. A candidate that cannot be resolved, is outside the current catalogue, fails authentication, is refused by Pi's model change, or throws moves to the next one; duplicate candidates are collapsed to their first position.
@@ -179,12 +187,12 @@ The switch reports one warning: a fallback notification when a later candidate w
 Fallback chains are not retried past a direction: each Plan boundary starts again from the first candidate.
 Each candidate's authentication has a fixed two-second budget; a candidate whose authentication does not finish in time is treated as failed and the next candidate is tried, so one hung provider cannot stall the direction. A definite failure — `ok: false` or a thrown error — is not treated as a failed candidate: the candidate is still handed to Pi's model change, which decides from whether credentials are configured, so a transient resolution failure cannot silently skip a candidate that would apply. The timed-out authentication is not cancelled and its later result is discarded: only a candidate that authenticated is ever applied, so a slow primary cannot take the model back from an applied fallback. The budget is per candidate, so a chain of N candidates can wait up to roughly N × 2 seconds. `pi.setModel()` has no cancellable API, so a model change that hangs after successful authentication still cannot be interrupted.
 Implementing a saved plan first preflights the session's current model, before the chain is applied. That check runs under the same two-second budget but has no fallback: a timeout aborts the implementation with an error notice and keeps the saved plan available, rather than switching. Restoring the previously active model after a failed Plan entry or a failed implementation handoff skips the authentication probe entirely, so a hang there cannot leave the session on the switched model.
-The settings screen keeps managing one model per direction; editing `pi-plan-mode.json` is what configures and orders a chain, and choosing a model in that screen replaces the chain with that single model.
+The settings screen keeps managing one model per direction: choosing a model there then asks for a bound thinking level on the same save and writes a single-element array. Editing `pi-plan-mode.json` is what configures and orders a chain and binds per-candidate thinking levels.
 
-The switch applies Pi's normal model-change behavior and then restores the current thinking level, so `thinkingLevel`, per-model thinking overrides, and manual thinking changes are unaffected.
+The switch applies the candidate's bound `thinkingLevel` when the candidate carries one, and otherwise restores the pre-switch thinking level. `thinkingLevel`, per-model thinking overrides, and manual thinking changes are unaffected when no candidate carries a level. Pi's level clamp is reported as a single bounded warning that names the requested and the effective level.
 A candidate outside the current catalogue or without authentication is skipped in favor of the next configured candidate, and a fully failed chain keeps the current model; the stored preference is not deleted.
-Switching completes inside the transition before any request that transition starts, so a first implementation request already uses the selected model.
-Fresh implementation sessions start from the `normalModel` chain, overridable once in the fresh menu.
+Switching completes inside the transition before any request that transition starts, so a first implementation request already uses the selected model and its bound thinking level.
+Fresh implementation sessions start from the `normalModel` chain, overridable once in the fresh menu; a one-shot thinking pick in the fresh menu overrides the candidate's bound level for that one session.
 
 Changing these settings applies to later Plan transitions only.
 Invalid values invalidate the settings document like every other field; a settings read failure falls back to no switching.

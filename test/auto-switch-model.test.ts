@@ -13,14 +13,20 @@ function autoSwitchSettings(overrides: Partial<PlanModeSettings> = {}): PlanMode
   return {
     thinkingLevel: "inherit",
     autoSwitchModel: true,
-    planModel: PLAN_MODEL,
-    normalModel: NORMAL_MODEL,
+    planModel: [PLAN_MODEL],
+    normalModel: [NORMAL_MODEL],
     ...overrides,
   };
 }
 
-function createHarness(settings: PlanModeSettings, options: { resolveModels?: boolean } = {}) {
-  const mock = createMockPi({ activeTools: ["read", "edit", "write"] });
+function createHarness(
+  settings: PlanModeSettings,
+  options: { resolveModels?: boolean; clampThinkingLevel?: (level: string) => string } = {},
+) {
+  const mock = createMockPi({
+    activeTools: ["read", "edit", "write"],
+    ...(options.clampThinkingLevel ? { clampThinkingLevel: options.clampThinkingLevel } : {}),
+  });
   planMode(mock.pi, {
     readSettings: async () => ({ kind: "loaded" as const, settings }),
   });
@@ -177,7 +183,7 @@ test("a model switch preserves the current thinking level", async () => {
 test("model identifiers with terminal control characters are sanitized in notifications", async () => {
   const { mock, context } = createHarness(
     autoSwitchSettings({
-      planModel: { provider: "openai-codex", modelId: `plan${ESC}[31m-model` },
+      planModel: [{ provider: "openai-codex", modelId: `plan${ESC}[31m-model` }],
     }),
     { resolveModels: false },
   );
@@ -597,4 +603,170 @@ test("a definite authentication failure defers to setModel instead of skipping t
   await thrown.mock.commands.get("plan")?.handler("start", thrown.context.ctx);
   assert.deepEqual(thrown.mock.setModels, [{ provider: PLAN_MODEL.provider, id: PLAN_MODEL.modelId }]);
   assert.deepEqual(warningMessages(thrown.context), []);
+});
+
+test("a successful candidate with thinkingLevel applies it after setModel resets the level", async () => {
+  const { mock, context } = createHarness(
+    autoSwitchSettings({ planModel: [{ ...PLAN_MODEL, thinkingLevel: "xhigh" }] }),
+  );
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    // Mirror pi.setModel resetting the thinking level for the new model.
+    mock.rawPi.setThinkingLevel("off");
+    return applied;
+  };
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.equal(mock.thinkingLevel, "xhigh");
+  assert.deepEqual(warningMessages(context), []);
+});
+
+test("a fallback candidate applies its own thinkingLevel when the primary fails", async () => {
+  const { mock, context } = createHarness(
+    autoSwitchSettings({
+      planModel: [PLAN_MODEL, { ...FALLBACK_MODEL, thinkingLevel: "medium" }],
+    }),
+  );
+  mockCtx(context).modelRegistry.find = resolveOnly(PLAN_MODEL.provider);
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    mock.rawPi.setThinkingLevel("off");
+    return applied;
+  };
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.deepEqual(mock.setModels, [{ provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId }]);
+  assert.equal(mock.thinkingLevel, "medium");
+  const warnings = warningMessages(context);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /fell back/u);
+});
+
+test("an already-current candidate with thinkingLevel applies the level without re-switching", async () => {
+  const { mock, context } = createHarness(
+    autoSwitchSettings({
+      planModel: [{ ...PLAN_MODEL, thinkingLevel: "high" }, FALLBACK_MODEL],
+    }),
+  );
+  mockCtx(context).model = { provider: PLAN_MODEL.provider, id: PLAN_MODEL.modelId };
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.deepEqual(mock.setModels, []);
+  assert.equal(mock.thinkingLevel, "high");
+  assert.deepEqual(warningMessages(context), []);
+});
+
+test("a successful candidate without thinkingLevel restores the pre-switch thinking level", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL] }));
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    mock.rawPi.setThinkingLevel("xhigh");
+    return applied;
+  };
+  const initialThinking = mock.thinkingLevel;
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.equal(mock.thinkingLevel, initialThinking);
+});
+
+test("a clamped thinking level notifies once with the requested and effective values", async () => {
+  const { mock, context } = createHarness(
+    autoSwitchSettings({ planModel: [{ ...PLAN_MODEL, thinkingLevel: "max" }] }),
+    { clampThinkingLevel: (level) => (level === "max" ? "high" : level) },
+  );
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.equal(mock.thinkingLevel, "high");
+  const warnings = warningMessages(context);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /max/);
+  assert.match(warnings[0] ?? "", /high/);
+});
+
+test("a stale session does not apply a candidate's thinkingLevel", async () => {
+  const { mock, context } = createHarness(
+    autoSwitchSettings({ planModel: [{ ...PLAN_MODEL, thinkingLevel: "xhigh" }] }),
+  );
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  let replaced = false;
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    mock.rawPi.setThinkingLevel("off");
+    if (!replaced) {
+      replaced = true;
+      const replacementCtx = createMockContext({
+        sessionManager: {
+          getSessionId: () => "other-session",
+          getSessionName: () => undefined,
+          getBranch: () => [],
+          getEntries: () => [],
+        },
+      });
+      await mock.events.get("session_start")?.[0]?.({ reason: "replacement" }, replacementCtx.ctx);
+    }
+    return applied;
+  };
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  // 旧会话的目标等级不能写回。
+  assert.equal(mock.thinkingLevel, "off");
+});
+
+test("a fully failed chain does not touch the thinking level", async () => {
+  const { mock, context } = createHarness(
+    autoSwitchSettings({
+      planModel: [
+        { ...PLAN_MODEL, thinkingLevel: "xhigh" },
+        { ...FALLBACK_MODEL, thinkingLevel: "xhigh" },
+      ],
+    }),
+    { resolveModels: false },
+  );
+  const initialThinking = mock.thinkingLevel;
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.equal(mock.thinkingLevel, initialThinking);
+  assert.equal(warningMessages(context).length, 1);
+});
+
+test("a throwing thinking restore still reports one switch failure warning", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL] }));
+  const originalSetThinking = mock.rawPi.setThinkingLevel.bind(mock.rawPi);
+  // 恢复原等级（off）时抛错；setModel 模拟的等级重置仍可写入。
+  mock.rawPi.setThinkingLevel = (level: string) => {
+    if (level === "off") throw new Error("restore failed");
+    return originalSetThinking(level);
+  };
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    originalSetThinking("xhigh");
+    return applied;
+  };
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  assert.deepEqual(mock.setModels, [{ provider: PLAN_MODEL.provider, id: PLAN_MODEL.modelId }]);
+  const warnings = warningMessages(context);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /failed/iu);
+  assert.match(warnings[0] ?? "", /restore failed/u);
 });

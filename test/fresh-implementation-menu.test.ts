@@ -119,7 +119,7 @@ test("fresh settings use the supplied plan thinking level on older Pi contexts",
 
   assert.deepEqual(selectedRuntime, {
     model: { provider: "provider\u001b[31m-one", modelId: "model\u202e-one" },
-    thinkingLevel: "high",
+    inheritedThinkingLevel: "high",
   });
 });
 
@@ -425,7 +425,7 @@ test("fresh model picker keeps same as plan available outside the model scope", 
       provider: "provider\u001b[31m-one",
       modelId: "model\u202e-one",
     },
-    thinkingLevel: "medium",
+    inheritedThinkingLevel: "medium",
   });
 });
 
@@ -533,7 +533,7 @@ test("closing and reopening fresh settings resets its draft to the plan runtime"
 
   assert.deepEqual(selectedRuntime, {
     model: { provider: "provider\u001b[31m-one", modelId: "model\u202e-one" },
-    thinkingLevel: "medium",
+    inheritedThinkingLevel: "medium",
   });
 });
 
@@ -574,6 +574,7 @@ test("fresh settings keep the configured fallback chain when the default model i
     model: DIRTY_MODEL,
     fallbackModels: [CLEAN_MODEL],
     thinkingLevel: "high",
+    inheritedThinkingLevel: "medium",
   });
   assert.deepEqual(context.notifications, []);
 });
@@ -610,7 +611,11 @@ test("fresh settings skip an unavailable primary default and use the next availa
   );
 
   // 可用候选项选择后不再保留其后备项，且不弹出“不可用”提示。
-  assert.deepEqual(selectedRuntime, { model: DIRTY_MODEL, thinkingLevel: "high" });
+  assert.deepEqual(selectedRuntime, {
+    model: DIRTY_MODEL,
+    thinkingLevel: "high",
+    inheritedThinkingLevel: "medium",
+  });
   assert.deepEqual(context.notifications, []);
 });
 
@@ -666,7 +671,49 @@ test("fresh settings keep the remaining chain when the default disappears while 
     model: raceOverride(RACE_MODELS[1]),
     fallbackModels: [raceOverride(RACE_MODELS[2])],
     thinkingLevel: "high",
+    inheritedThinkingLevel: "medium",
   });
   assert.equal(availableReads, 2);
   assert.match(context.notifications.at(-1)?.message ?? "", /unavailable; using/iu);
+});
+
+test("fresh settings leave thinking unset so a bound fallback candidate level survives", async () => {
+  let selectedRuntime: unknown;
+  const boundFallback = { ...CLEAN_MODEL, thinkingLevel: "high" as const };
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    thinkingLevel: "medium",
+    modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
+    select: async (title: string) => {
+      if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+      if (title.startsWith("Fresh implementation settings")) return "Start fresh implementation";
+      return undefined;
+    },
+  });
+
+  await showReadyPlanMenu(
+    context.ctx,
+    menuOptions({
+      planThinkingLevel: "medium",
+      implementationDefaults: {
+        model: DIRTY_MODEL,
+        fallbackModels: [boundFallback],
+        // 链上任一候选绑定等级时 controller 不透传 planning level，menu 不得回填。
+      },
+      implementFresh: (runtime: unknown) => {
+        selectedRuntime = runtime;
+      },
+    }),
+  );
+
+  // 用户未显式改选 thinking：runtime 不得携带 top-level thinkingLevel，
+  // 否则 apply 时 planning level 会压过后备候选绑定的 high。
+  assert.deepEqual(selectedRuntime, {
+    model: DIRTY_MODEL,
+    fallbackModels: [boundFallback],
+    inheritedThinkingLevel: "medium",
+  });
+  assert.deepEqual(context.notifications, []);
 });

@@ -17,8 +17,10 @@ import {
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
   IMPLEMENTATION_PLAN_RETENTIONS,
+  IMPLEMENTATION_THINKING_LEVELS,
   normalizeKeyId,
   PLAN_MODE_THINKING_LEVELS,
+  type PlanModeFixedThinkingLevel,
   type PlanModeSettings,
   type PlanModeSettingsLoadResult,
   type PlanModeSettingsPatch,
@@ -51,7 +53,15 @@ export interface PlanModeSettingsMenuOptions {
   onSaved(settings: PlanModeSettings): void;
 }
 
-type Screen = "settings" | "tools" | "plan-model" | "normal-model" | "export" | "shortcut";
+type Screen =
+  | "settings"
+  | "tools"
+  | "plan-model"
+  | "plan-model-thinking"
+  | "normal-model"
+  | "normal-model-thinking"
+  | "export"
+  | "shortcut";
 type Action =
   | "set-thinking"
   | "open-tools"
@@ -61,8 +71,10 @@ type Action =
   | "set-auto-switch"
   | "open-plan-model"
   | "set-plan-model"
+  | "set-plan-model-thinking"
   | "open-normal-model"
   | "set-normal-model"
+  | "set-normal-model-thinking"
   | "open-export"
   | "set-export"
   | "open-shortcut"
@@ -84,6 +96,13 @@ export async function showPlanModeSettings(
   const implementationModels = snapshotAvailableImplementationModels(ctx);
   const modelItemIds = new Map(implementationModels.map((model, index) => [model, `plan-settings-model:${index}`]));
   const modelsByItemId = new Map(implementationModels.map((model) => [modelItemIds.get(model) as string, model]));
+
+  // 等待用户在确认模型后再补选思考等级的中间状态。
+  type PendingModelSelection = {
+    direction: "plan" | "normal";
+    model: AvailableImplementationModel;
+  };
+  let pendingModel: PendingModelSelection | undefined;
 
   const loadState = async (): Promise<SettingsMenuState> => {
     const loaded = await readSettings(options.settingsPath);
@@ -225,6 +244,78 @@ export async function showPlanModeSettings(
         viewportSize: 10,
         hint: "back",
       }),
+      "plan-model-thinking": ({ state }) => {
+        const pending = pendingModel?.direction === "plan" ? pendingModel.model : undefined;
+        if (!pending)
+          return {
+            kind: "choice",
+            title: "Plan enter model thinking",
+            lines: [],
+            items: [],
+            action: "set-plan-model-thinking" as const,
+            initialItemId: "inherit",
+            hint: "back",
+          };
+        return {
+          kind: "choice",
+          title: "Plan enter model thinking",
+          lines: [
+            `Model: ${safeModelMetadata(pending.id, "unknown model")} [${safeModelMetadata(pending.provider, "unknown provider")}]`,
+            "Keep current behavior leaves the model without a bound thinking level.",
+            "Choosing a level applies it after the next model switch.",
+          ],
+          items: [
+            { id: "inherit", label: "Keep current behavior" },
+            ...IMPLEMENTATION_THINKING_LEVELS.map((level) => ({
+              id: level,
+              label: level,
+              description:
+                level === implementationLevelForPreSelect(state.settings.planModel, pending)
+                  ? "Current binding"
+                  : undefined,
+            })),
+          ],
+          action: "set-plan-model-thinking" as const,
+          initialItemId: implementationLevelForPreSelect(state.settings.planModel, pending) ?? "inherit",
+          hint: "back",
+        };
+      },
+      "normal-model-thinking": ({ state }) => {
+        const pending = pendingModel?.direction === "normal" ? pendingModel.model : undefined;
+        if (!pending)
+          return {
+            kind: "choice",
+            title: "Plan exit model thinking",
+            lines: [],
+            items: [],
+            action: "set-normal-model-thinking" as const,
+            initialItemId: "inherit",
+            hint: "back",
+          };
+        return {
+          kind: "choice",
+          title: "Plan exit model thinking",
+          lines: [
+            `Model: ${safeModelMetadata(pending.id, "unknown model")} [${safeModelMetadata(pending.provider, "unknown provider")}]`,
+            "Keep current behavior leaves the model without a bound thinking level.",
+            "Choosing a level applies it after the next model switch.",
+          ],
+          items: [
+            { id: "inherit", label: "Keep current behavior" },
+            ...IMPLEMENTATION_THINKING_LEVELS.map((level) => ({
+              id: level,
+              label: level,
+              description:
+                level === implementationLevelForPreSelect(state.settings.normalModel, pending)
+                  ? "Current binding"
+                  : undefined,
+            })),
+          ],
+          action: "set-normal-model-thinking" as const,
+          initialItemId: implementationLevelForPreSelect(state.settings.normalModel, pending) ?? "inherit",
+          hint: "back",
+        };
+      },
       export: ({ state }) => {
         const configured = configuredPlanExportPath(state.settings);
         const destination = planExportDestination(configured, ctx.cwd);
@@ -287,30 +378,65 @@ export async function showPlanModeSettings(
       "set-plan-model": async ({ ctx: actionCtx, itemId, signal }) => {
         const model = itemId ? modelsByItemId.get(itemId) : undefined;
         if (itemId !== "off" && !model) return { kind: "rejected" };
-        const planModel = model ? { provider: model.provider, modelId: model.id } : null;
-        const result = await savePatch(
-          actionCtx,
-          { planModel },
-          signal,
-          model
-            ? `Plan enter model: ${safeModelReference({ provider: model.provider, modelId: model.id })}.`
-            : "Plan enter model: off.",
-        );
-        return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
+        if (!model) {
+          // 选择 Off：直接清空该方向，跳过思考等级。
+          pendingModel = undefined;
+          const result = await savePatch(actionCtx, { planModel: null }, signal, "Plan enter model: off.");
+          return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
+        }
+        pendingModel = { direction: "plan", model };
+        return { kind: "to", screen: "plan-model-thinking" };
       },
       "open-normal-model": async () => ({ kind: "to", screen: "normal-model" }),
       "set-normal-model": async ({ ctx: actionCtx, itemId, signal }) => {
         const model = itemId ? modelsByItemId.get(itemId) : undefined;
         if (itemId !== "off" && !model) return { kind: "rejected" };
-        const normalModel = model ? { provider: model.provider, modelId: model.id } : null;
+        if (!model) {
+          pendingModel = undefined;
+          const result = await savePatch(actionCtx, { normalModel: null }, signal, "Plan exit model: off.");
+          return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
+        }
+        pendingModel = { direction: "normal", model };
+        return { kind: "to", screen: "normal-model-thinking" };
+      },
+      "set-plan-model-thinking": async ({ ctx: actionCtx, itemId, signal }) => {
+        const pending = pendingModel?.direction === "plan" ? pendingModel.model : undefined;
+        if (!pending) return { kind: "to", screen: "settings" };
+        const thinkingLevel = itemId === "inherit" ? undefined : itemId;
+        const candidate: ImplementationModelOverride = {
+          provider: pending.provider,
+          modelId: pending.id,
+          ...(thinkingLevel ? { thinkingLevel: thinkingLevel as PlanModeFixedThinkingLevel } : {}),
+        };
         const result = await savePatch(
           actionCtx,
-          { normalModel },
+          { planModel: [candidate] },
           signal,
-          model
-            ? `Plan exit model: ${safeModelReference({ provider: model.provider, modelId: model.id })}.`
-            : "Plan exit model: off.",
+          thinkingLevel
+            ? `Plan enter model: ${safeModelReference(candidate)} (thinking ${thinkingLevel}).`
+            : `Plan enter model: ${safeModelReference(candidate)}.`,
         );
+        pendingModel = undefined;
+        return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
+      },
+      "set-normal-model-thinking": async ({ ctx: actionCtx, itemId, signal }) => {
+        const pending = pendingModel?.direction === "normal" ? pendingModel.model : undefined;
+        if (!pending) return { kind: "to", screen: "settings" };
+        const thinkingLevel = itemId === "inherit" ? undefined : itemId;
+        const candidate: ImplementationModelOverride = {
+          provider: pending.provider,
+          modelId: pending.id,
+          ...(thinkingLevel ? { thinkingLevel: thinkingLevel as PlanModeFixedThinkingLevel } : {}),
+        };
+        const result = await savePatch(
+          actionCtx,
+          { normalModel: [candidate] },
+          signal,
+          thinkingLevel
+            ? `Plan exit model: ${safeModelReference(candidate)} (thinking ${thinkingLevel}).`
+            : `Plan exit model: ${safeModelReference(candidate)}.`,
+        );
+        pendingModel = undefined;
         return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
       },
       "open-export": async () => ({ kind: "to", screen: "export" }),
@@ -486,6 +612,18 @@ function autoSwitchModelValue(
   const fallback = remaining > 0 ? ` · +${remaining} fallback` : "";
   if (index < 0) return `off · ${safeModelReference(primary)} unavailable${fallback}`;
   return `${safeModelReference(primary)}${fallback}`;
+}
+
+/** 预选用户刚选中模型自身绑定的思考等级；链中别的候选（含不可用项）的等级不能借给它。 */
+function implementationLevelForPreSelect(
+  configured: ImplementationModelCandidates | undefined,
+  selected: { provider: string; id: string } | undefined,
+): ImplementationModelOverride["thinkingLevel"] {
+  if (!selected) return undefined;
+  const candidate = implementationModelCandidateList(configured).find(
+    (entry) => entry.provider === selected.provider && entry.modelId === selected.id,
+  );
+  return candidate?.thinkingLevel;
 }
 
 function autoSwitchModelItems(
