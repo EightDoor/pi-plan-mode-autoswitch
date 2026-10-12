@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
+import { IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS } from "../src/implementation-models.js";
 import planMode, { completePlanArguments } from "../src/plan-mode.js";
 import { restorePlanModeState } from "../src/state.js";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
@@ -406,6 +407,47 @@ test("saved Plan implementation preflight retains state on auth failure or sessi
   await pendingImplementation;
   assert.equal(replaced.sentUserMessages.length, 0);
   assert.equal(latestState(replaced.entries)?.savedPlan?.plan, PLAN);
+});
+
+test("saved Plan implementation aborts when preflight authentication exceeds two seconds", async () => {
+  vi.useFakeTimers();
+  try {
+    const savedEntry = stateEntry({
+      enabled: false,
+      awaitingAction: false,
+      savedPlan: { plan: PLAN, source: "plan_mode_complete" },
+    });
+    const mock = createMockPi({ activeTools: ["read", "edit"] });
+    planMode(mock.pi);
+    const context = createMockContext({
+      hasUI: true,
+      model: MODEL,
+      // 当前模型认证永不返回：实施前预检必须在 2 秒后中止，而不是一直等待。
+      modelRegistry: { getApiKeyAndHeaders: () => new Promise(() => {}) },
+      sessionManager: {
+        getBranch: () => [savedEntry],
+        getEntries: () => [savedEntry],
+      },
+    });
+    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+
+    const implementing = mock.commands.get("plan")?.handler("implement", context.ctx) as Promise<unknown>;
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS);
+    await implementing;
+
+    assert.equal(mock.sentUserMessages.length, 0);
+    assert.equal(context.statuses.get("plan-mode"), "plan saved");
+    assert.match(context.notifications.at(-1)?.message ?? "", /authentication timed out/u);
+    assert.equal(context.notifications.at(-1)?.level, "error");
+    // 中止后已保存方案仍在会话内可用。
+    await mock.commands.get("plan")?.handler("show", context.ctx);
+    assert.match(
+      String((mock.sentMessages.at(-1)?.message as { content?: string })?.content),
+      /Saved implementation plan/u,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("saved Plan survives resume and blocks replacement workflows", async () => {

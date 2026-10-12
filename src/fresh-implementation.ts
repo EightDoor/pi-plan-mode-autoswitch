@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type ImplementationModelOverride, implementationModelFailureSummary } from "./implementation-models.js";
+import {
+  type ImplementationModelOverride,
+  implementationModelFailureSummary,
+  withImplementationModelAuthTimeout,
+} from "./implementation-models.js";
 import { PLAN_HISTORY_IMPLEMENTATION_PROMPT } from "./message-transform.js";
 import { createModeContractMessage } from "./mode-contract.js";
 import type { ImplementationPlanRetention } from "./settings.js";
@@ -300,7 +304,7 @@ async function preflightModel(
   return undefined;
 }
 
-/** 认证单个候选；失败原因记入 failures。解析异常与认证失败同样视为该候选不可用。 */
+/** 认证单个候选；失败原因记入 failures。解析异常、认证失败与认证超时同样视为该候选不可用。 */
 async function authorizeModel(
   ctx: ExtensionCommandContext,
   model: NonNullable<ExtensionCommandContext["model"]>,
@@ -309,7 +313,8 @@ async function authorizeModel(
 ): Promise<boolean> {
   let auth: Awaited<ReturnType<ExtensionCommandContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
   try {
-    auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    // 认证有 2 秒上限：首选卡住时应继续认证下一候选，而不是无限等待。
+    auth = await withImplementationModelAuthTimeout(() => ctx.modelRegistry.getApiKeyAndHeaders(model));
   } catch (error: unknown) {
     failures.push(`${reference}: ${safeErrorDetail(error)}`);
     return false;

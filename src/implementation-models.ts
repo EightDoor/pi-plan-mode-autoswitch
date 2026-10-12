@@ -25,6 +25,45 @@ export function implementationModelFailureSummary(failures: readonly string[]): 
   return characters.length > 300 ? `${characters.slice(0, 299).join("")}…` : summary;
 }
 
+/** 单个候选的认证等待上限；超时即视为该候选失败，继续尝试下一个。 */
+export const IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS = 2_000;
+
+/** 认证超时的专用错误：调用方据此区分「超时该跳过候选」与「解析失败应交给 Pi 判定」。 */
+class ImplementationModelAuthTimeoutError extends Error {}
+
+export function isImplementationModelAuthTimeoutError(error: unknown): boolean {
+  return error instanceof ImplementationModelAuthTimeoutError;
+}
+
+/**
+ * 给无副作用的模型认证加固定超时。
+ * 超时只让调用方继续下一个候选，不取消底层认证；底层稍后返回的结果被丢弃，
+ * 避免它把已经应用到后备模型的切换再抢占回去。
+ */
+export function withImplementationModelAuthTimeout<T>(operation: () => Promise<T>): Promise<T> {
+  const pending = operation();
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new ImplementationModelAuthTimeoutError(
+          `authentication timed out after ${IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS}ms`,
+        ),
+      );
+    }, IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS);
+    // 超时后底层仍会 settle，这里必须消费它，否则产生未处理 rejection。
+    pending.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export interface AvailableImplementationModel {
   provider: string;
   id: string;

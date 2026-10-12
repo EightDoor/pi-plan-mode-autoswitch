@@ -31,7 +31,11 @@ import {
   formatTransferredPlanPrompt,
   startFreshImplementationFromState,
 } from "./fresh-implementation.js";
-import { implementationModelFailureSummary } from "./implementation-models.js";
+import {
+  implementationModelFailureSummary,
+  isImplementationModelAuthTimeoutError,
+  withImplementationModelAuthTimeout,
+} from "./implementation-models.js";
 import {
   createImplementationRetentionCoordinator,
   implementationRetentionPreview,
@@ -1777,7 +1781,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
             }
             let authenticated = false;
             try {
-              const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+              // 认证有 2 秒上限：首选卡住时应继续认证下一候选，而不是无限等待。
+              const auth = await withImplementationModelAuthTimeout(() => ctx.modelRegistry.getApiKeyAndHeaders(model));
               if (!isCurrent()) return "stale";
               if (auth.ok) authenticated = true;
               else failures.push(`${reference} could not be authenticated: ${safeTerminalText(auth.error)}`);
@@ -1965,6 +1970,23 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
           if (!model) {
             failures.push(`${targetReference} is unavailable`);
             continue;
+          }
+          // 认证探测只为给候选加 2 秒上限：只有超时才按失败处理并继续下一个。
+          // 解析失败（ok:false 或抛错）不作为拦截依据，交给 pi.setModel 按「凭证是否已配置」判定，
+          // 否则一次瞬时解析故障会让本该生效的候选被跳过。
+          // 恢复/回滚（targetOverride）整体跳过探测：它只有刚生效过的模型一个候选，超时被跳过
+          // 会把会话留在切换后的模型上，而该模型的认证几秒前刚刚成功解析过。
+          if (!targetOverride) {
+            try {
+              await withImplementationModelAuthTimeout(() => ctx.modelRegistry.getApiKeyAndHeaders(model));
+            } catch (error: unknown) {
+              if (stale()) return;
+              if (isImplementationModelAuthTimeoutError(error)) {
+                failures.push(`${targetReference} could not be authenticated: ${terminalErrorDetail(error)}`);
+                continue;
+              }
+            }
+            if (stale()) return;
           }
           let applied = false;
           try {

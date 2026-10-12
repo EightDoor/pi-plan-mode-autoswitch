@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { withImplementationModelAuthTimeout } from "./implementation-models.js";
 
 export function savedPlanBlocksNewWorkflow(ctx: ExtensionContext, hasSavedPlan: boolean) {
   if (!hasSavedPlan) return false;
@@ -19,7 +20,8 @@ export async function preflightSavedPlanImplementation(ctx: ExtensionContext, is
   }
   let auth: Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
   try {
-    auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    // 认证有 2 秒上限：这里只有「通过」和「中止实施」两种结果，超时按失败处理并保留已保存方案。
+    auth = await withImplementationModelAuthTimeout(() => ctx.modelRegistry.getApiKeyAndHeaders(model));
   } catch (error: unknown) {
     if (!isCurrent()) return false;
     const detail = error instanceof Error ? error.message : String(error);

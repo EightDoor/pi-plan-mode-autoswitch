@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { startFreshImplementationSession } from "../src/fresh-implementation.js";
+import { IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS } from "../src/implementation-models.js";
 import planMode from "../src/plan-mode.js";
 import { MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH, restorePlanModeState } from "../src/state.js";
 import { createMockContext, createMockPi } from "./support.js";
@@ -1295,4 +1296,131 @@ test("source preflight rejects with one warning when no candidate can be used", 
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]?.message ?? "", /no longer available/u);
   assert.match(warnings[0]?.message ?? "", /choose another model|configure authentication/iu);
+});
+
+test("source preflight moves on when a candidate's authentication exceeds two seconds", async () => {
+  vi.useFakeTimers();
+  try {
+    let destinationState: unknown;
+    const source = createMockContext({
+      mode: "rpc",
+      hasUI: true,
+      model: { provider: "planning-provider", id: "planning-model" },
+      modelRegistry: {
+        find: (provider: string, id: string) =>
+          provider === TARGET.provider && id === TARGET.id
+            ? TARGET
+            : provider === FALLBACK.provider && id === FALLBACK.id
+              ? FALLBACK
+              : provider === FALLBACK_TWO.provider && id === FALLBACK_TWO.id
+                ? FALLBACK_TWO
+                : undefined,
+        // 首选模型的认证永不返回，只能靠超时进入后备候选。
+        getApiKeyAndHeaders: async (model: unknown) =>
+          (model as { provider: string }).provider === TARGET.provider ? new Promise(() => {}) : { ok: true as const },
+      },
+      sessionManager: { getSessionFile: () => "/sessions/planning.jsonl" },
+      newSession: async (options: {
+        setup?: (manager: {
+          appendCustomMessageEntry(): string;
+          appendCustomEntry(customType: string, data: unknown): string;
+        }) => Promise<void>;
+        withSession?: (ctx: {
+          sessionManager: { getBranch(): unknown[] };
+          sendUserMessage(message: string): Promise<void>;
+        }) => Promise<void>;
+      }) => {
+        await options.setup?.({
+          appendCustomMessageEntry: () => "contract",
+          appendCustomEntry(_customType, data) {
+            destinationState = data;
+            return "state";
+          },
+        });
+        await options.withSession?.({
+          sessionManager: { getBranch: () => [] },
+          sendUserMessage: async () => undefined,
+        });
+        return { cancelled: false };
+      },
+    });
+
+    const pending = startFreshImplementationSession(source.ctx, {
+      plan: PLAN,
+      source: "plan_mode_complete",
+      retention: "keep",
+      stateEntryType: STATE_ENTRY_TYPE,
+      runtime: {
+        model: { provider: TARGET.provider, modelId: TARGET.id },
+        fallbackModels: [
+          { provider: FALLBACK.provider, modelId: FALLBACK.id },
+          { provider: FALLBACK_TWO.provider, modelId: FALLBACK_TWO.id },
+        ],
+        thinkingLevel: "high",
+      },
+      isCurrent: () => true,
+    });
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS);
+    const result = await pending;
+
+    assert.equal(result.kind, "started");
+    // 超时的首选被跳过，目标会话从后备候选开始，并保留其余候选。
+    assert.deepEqual((destinationState as { pendingImplementationRuntime?: unknown }).pendingImplementationRuntime, {
+      version: 2,
+      model: { provider: FALLBACK.provider, modelId: FALLBACK.id },
+      fallbackModels: [{ provider: FALLBACK_TWO.provider, modelId: FALLBACK_TWO.id }],
+      thinkingLevel: "high",
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("destination falls back when a restored candidate's authentication exceeds two seconds", async () => {
+  vi.useFakeTimers();
+  try {
+    const branch = [
+      stateEntry({
+        enabled: false,
+        awaitingAction: false,
+        pendingImplementationRuntime: {
+          version: 2,
+          model: { provider: TARGET.provider, modelId: TARGET.id },
+          fallbackModels: [{ provider: FALLBACK.provider, modelId: FALLBACK.id }],
+          thinkingLevel: "high",
+        },
+      }),
+    ];
+    const mock = createMockPi({ thinkingLevel: "low" });
+    planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+    const context = createMockContext({
+      sessionManager: { getBranch: () => branch, getEntries: () => branch },
+      modelRegistry: {
+        find: (provider: string, id: string) =>
+          (provider === TARGET.provider && id === TARGET.id) || (provider === FALLBACK.provider && id === FALLBACK.id)
+            ? provider === TARGET.provider
+              ? TARGET
+              : FALLBACK
+            : undefined,
+        getApiKeyAndHeaders: async (model: unknown) =>
+          (model as { provider: string }).provider === TARGET.provider ? new Promise(() => {}) : { ok: true as const },
+      },
+    });
+    await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+    const pending = submitInput(mock, context.ctx);
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS);
+    assert.equal(await pending, undefined);
+
+    assert.deepEqual(mock.setModels, [FALLBACK]);
+    assert.equal(mock.thinkingLevel, "high");
+    assert.ok(context.notifications.some((notice) => /fell back to/iu.test(notice.message)));
+    assert.ok(context.notifications.some((notice) => /authentication timed out/iu.test(notice.message)));
+    assert.equal(
+      (mock.entries.at(-1)?.data as { pendingImplementationRuntime?: unknown } | undefined)
+        ?.pendingImplementationRuntime,
+      undefined,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
 });

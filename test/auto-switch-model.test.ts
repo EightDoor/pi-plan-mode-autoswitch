@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
+import { IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS } from "../src/implementation-models.js";
 import planMode from "../src/plan-mode.js";
 import type { PlanModeSettings } from "../src/settings.js";
 import { createMockContext, createMockPi } from "./support.js";
@@ -266,9 +267,20 @@ function resolveOnly(provider: string) {
     candidate === provider ? undefined : { provider: candidate, id: modelId };
 }
 
+/** createMockContext 把 ctx 断言成 never；需要直接注入 mock 字段的用例通过这个可写视图访问。 */
+function mockCtx(context: ReturnType<typeof createMockContext>) {
+  return context.ctx as unknown as {
+    model?: { provider: string; id: string };
+    modelRegistry: {
+      find: (provider: string, modelId: string) => { provider: string; id: string } | undefined;
+      getApiKeyAndHeaders: (model: unknown) => Promise<{ ok: boolean; error?: string; headers?: unknown }>;
+    };
+  };
+}
+
 test("an unavailable primary candidate falls back to the next configured candidate", async () => {
   const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
-  context.ctx.modelRegistry.find = resolveOnly(PLAN_MODEL.provider) as typeof context.ctx.modelRegistry.find;
+  mockCtx(context).modelRegistry.find = resolveOnly(PLAN_MODEL.provider);
 
   await startSession(mock, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
@@ -340,8 +352,8 @@ test("when every candidate fails the current model is kept with a single warning
 
 test("a candidate that is already the active model succeeds without switching again", async () => {
   const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
-  context.ctx.modelRegistry.find = resolveOnly(PLAN_MODEL.provider) as typeof context.ctx.modelRegistry.find;
-  context.ctx.model = { provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId };
+  mockCtx(context).modelRegistry.find = resolveOnly(PLAN_MODEL.provider);
+  mockCtx(context).model = { provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId };
 
   await startSession(mock, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
@@ -369,4 +381,220 @@ test("a fallback chain preserves terminal sanitization across both directions", 
   for (const entry of context.notifications) {
     assert.ok(!entry.message.includes(ESC), `notification leaked a control character: ${entry.message}`);
   }
+});
+
+/** 首选模型认证永久挂起，后备模型认证正常；返回释放首个认证的开关。 */
+function hangingPrimaryAuth(
+  context: ReturnType<typeof createMockContext>,
+  hangingProvider: string,
+  release: { resolve: () => void },
+) {
+  mockCtx(context).modelRegistry.getApiKeyAndHeaders = async (model: unknown) => {
+    if ((model as { provider: string }).provider !== hangingProvider) return { ok: true as const, headers: {} };
+    await new Promise<void>((resolve) => {
+      release.resolve = resolve;
+    });
+    return { ok: true as const, headers: {} };
+  };
+}
+
+test("a candidate whose authentication exceeds two seconds falls back to the next one", async () => {
+  vi.useFakeTimers();
+  try {
+    const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
+    const release = { resolve: () => {} };
+    hangingPrimaryAuth(context, PLAN_MODEL.provider, release);
+
+    await startSession(mock, context.ctx);
+    const entering = mock.commands.get("plan")?.handler("start", context.ctx) as Promise<unknown>;
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS);
+    await entering;
+
+    assert.deepEqual(mock.setModels, [{ provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId }]);
+    const warnings = warningMessages(context);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0] ?? "", /fell back/u);
+    assert.match(warnings[0] ?? "", /authentication timed out/u);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the exit direction also falls back when authentication exceeds two seconds", async () => {
+  vi.useFakeTimers();
+  try {
+    const { mock, context } = createHarness(autoSwitchSettings({ normalModel: [NORMAL_MODEL, FALLBACK_MODEL] }));
+    const release = { resolve: () => {} };
+    hangingPrimaryAuth(context, NORMAL_MODEL.provider, release);
+
+    await startSession(mock, context.ctx);
+    await mock.commands.get("plan")?.handler("start", context.ctx);
+    const exiting = mock.commands.get("plan")?.handler("exit", context.ctx) as Promise<unknown>;
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS);
+    await exiting;
+
+    assert.deepEqual(mock.setModels, [
+      { provider: PLAN_MODEL.provider, id: PLAN_MODEL.modelId },
+      { provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId },
+    ]);
+    assert.match(warningMessages(context)[0] ?? "", /authentication timed out/u);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a timed-out candidate is never applied even when its authentication settles later", async () => {
+  vi.useFakeTimers();
+  try {
+    const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
+    const release: { resolve: () => void } = { resolve: () => {} };
+    hangingPrimaryAuth(context, PLAN_MODEL.provider, release);
+
+    await startSession(mock, context.ctx);
+    const entering = mock.commands.get("plan")?.handler("start", context.ctx) as Promise<unknown>;
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS);
+    await entering;
+    release.resolve();
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS * 2);
+
+    assert.deepEqual(mock.setModels, [{ provider: FALLBACK_MODEL.provider, id: FALLBACK_MODEL.modelId }]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("when every candidate times out the current model is kept with one bounded warning", async () => {
+  vi.useFakeTimers();
+  try {
+    const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
+    mockCtx(context).modelRegistry.getApiKeyAndHeaders = () => new Promise<{ ok: boolean }>(() => {});
+
+    await startSession(mock, context.ctx);
+    const entering = mock.commands.get("plan")?.handler("start", context.ctx) as Promise<unknown>;
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS * 3);
+    await entering;
+
+    assert.deepEqual(mock.setModels, []);
+    const warnings = warningMessages(context);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0] ?? "", /kept the current model/u);
+    assert.match(warnings[0] ?? "", /authentication timed out/u);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("an authentication that settles before two seconds is applied without a fallback", async () => {
+  vi.useFakeTimers();
+  try {
+    const { mock, context } = createHarness(autoSwitchSettings({ planModel: [PLAN_MODEL, FALLBACK_MODEL] }));
+    let releaseAuth!: () => void;
+    mockCtx(context).modelRegistry.getApiKeyAndHeaders = async () => {
+      await new Promise<void>((resolve) => {
+        releaseAuth = resolve;
+      });
+      return { ok: true as const, headers: {} };
+    };
+
+    await startSession(mock, context.ctx);
+    const entering = mock.commands.get("plan")?.handler("start", context.ctx) as Promise<unknown>;
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS - 1);
+    releaseAuth();
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS);
+    await entering;
+
+    assert.deepEqual(mock.setModels, [{ provider: PLAN_MODEL.provider, id: PLAN_MODEL.modelId }]);
+    assert.deepEqual(warningMessages(context), []);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a restore after a failed handoff is not blocked by a failed authentication resolution", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings());
+  const session = mockCtx(context);
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    // 模拟 Pi 真正切换会话模型；只有模型真的变了，失败后的恢复才有意义。
+    session.model = model as { provider: string; id: string };
+    return applied;
+  };
+  mockCtx(context).modelRegistry.getApiKeyAndHeaders = async () => ({ ok: false as const, error: "resolver offline" });
+  mock.rawPi.sendUserMessage = () => {
+    throw new Error("handoff failed");
+  };
+
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  await completePlan(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("implement", context.ctx);
+
+  // 解析失败不拦截候选：模型照常切换，失败后也照常恢复，会话不会停在切换后的模型上。
+  assert.deepEqual(
+    mock.setModels.map((model) => (model as { id: string }).id),
+    [PLAN_MODEL.modelId, NORMAL_MODEL.modelId, PLAN_MODEL.modelId],
+  );
+  assert.deepEqual(warningMessages(context), []);
+});
+
+test("a restore after a failed handoff bypasses the authentication probe entirely", async () => {
+  vi.useFakeTimers();
+  try {
+    const { mock, context } = createHarness(autoSwitchSettings());
+    const session = mockCtx(context);
+    const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+    mock.rawPi.setModel = async (model: unknown) => {
+      const applied = await originalSetModel(model);
+      session.model = model as { provider: string; id: string };
+      return applied;
+    };
+    let authCalls = 0;
+    mockCtx(context).modelRegistry.getApiKeyAndHeaders = async () => {
+      authCalls += 1;
+      // 进入与切换时的认证正常；只有恢复原模型时的探测会永久挂起。
+      return authCalls <= 2 ? { ok: true as const, headers: {} } : new Promise<{ ok: boolean }>(() => {});
+    };
+    mock.rawPi.sendUserMessage = () => {
+      throw new Error("handoff failed");
+    };
+
+    await startSession(mock, context.ctx);
+    await mock.commands.get("plan")?.handler("start", context.ctx);
+    await completePlan(mock, context.ctx);
+    const implementing = mock.commands.get("plan")?.handler("implement", context.ctx) as Promise<unknown>;
+    await vi.advanceTimersByTimeAsync(IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS * 3);
+    await implementing;
+
+    // 恢复不探测认证：即使探测会挂起，也不会因超时把会话留在切换后的模型上，也不产生失败警告。
+    assert.deepEqual(
+      mock.setModels.map((model) => (model as { id: string }).id),
+      [PLAN_MODEL.modelId, NORMAL_MODEL.modelId, PLAN_MODEL.modelId],
+    );
+    assert.equal(authCalls, 2);
+    assert.deepEqual(warningMessages(context), []);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a definite authentication failure defers to setModel instead of skipping the candidate", async () => {
+  const rejected = createHarness(autoSwitchSettings());
+  mockCtx(rejected.context).modelRegistry.getApiKeyAndHeaders = async () => ({
+    ok: false as const,
+    error: "resolver offline",
+  });
+  await startSession(rejected.mock, rejected.context.ctx);
+  await rejected.mock.commands.get("plan")?.handler("start", rejected.context.ctx);
+  assert.deepEqual(rejected.mock.setModels, [{ provider: PLAN_MODEL.provider, id: PLAN_MODEL.modelId }]);
+  assert.deepEqual(warningMessages(rejected.context), []);
+
+  const thrown = createHarness(autoSwitchSettings());
+  mockCtx(thrown.context).modelRegistry.getApiKeyAndHeaders = async () => {
+    throw new Error("resolver offline");
+  };
+  await startSession(thrown.mock, thrown.context.ctx);
+  await thrown.mock.commands.get("plan")?.handler("start", thrown.context.ctx);
+  assert.deepEqual(thrown.mock.setModels, [{ provider: PLAN_MODEL.provider, id: PLAN_MODEL.modelId }]);
+  assert.deepEqual(warningMessages(thrown.context), []);
 });
