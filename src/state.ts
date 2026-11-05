@@ -70,6 +70,8 @@ export interface PlanModeState {
   savedPlan?: SavedPlan;
   activeImplementation?: ActiveImplementationPlan;
   pendingImplementationRuntime?: PendingImplementationRuntime;
+  /** 活动 Plan 工作流快照的 planModel 候选链，用于请求期间的额度降级。 */
+  activePlanModelCandidates?: ImplementationModelOverride[];
   selectedToolNames?: string[];
   selectedToolKeys?: string[];
   workflowToolPolicy?: PlanModeWorkflowToolPolicy;
@@ -122,6 +124,9 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     savedPlan,
     activeImplementation,
     pendingImplementationRuntime,
+    activePlanModelCandidates: enabled
+      ? normalizeActivePlanModelCandidates(entry.data.activePlanModelCandidates)
+      : undefined,
     selectedToolNames: stringArray(entry.data.selectedToolNames),
     selectedToolKeys: stringArray(entry.data.selectedToolKeys),
     workflowToolPolicy: enabled ? normalizeWorkflowToolPolicy(entry.data.workflowToolPolicy) : undefined,
@@ -205,6 +210,22 @@ function normalizePendingModel(value: unknown): ImplementationModelOverride | un
     model.thinkingLevel = thinkingLevel;
   }
   return model;
+}
+
+/** 活动 Plan 的候选链：只在 Plan 激活时保存，任一项非法则整条链作废，避免降级用到错误目标。 */
+function normalizeActivePlanModelCandidates(value: unknown): ImplementationModelOverride[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const seen = new Set<string>();
+  const candidates: ImplementationModelOverride[] = [];
+  for (const item of value) {
+    const candidate = normalizePendingModel(item);
+    if (!candidate) return undefined;
+    const key = JSON.stringify([candidate.provider, candidate.modelId]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(candidate);
+  }
+  return candidates.length > 0 ? candidates : undefined;
 }
 
 /** v1 一次性状态没有后备链；v2 的后备链必须先有主模型，且去重后非空。 */

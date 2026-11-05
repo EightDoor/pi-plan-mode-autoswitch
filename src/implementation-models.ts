@@ -27,6 +27,27 @@ export function implementationModelFailureSummary(failures: readonly string[]): 
   return characters.length > 300 ? `${characters.slice(0, 299).join("")}…` : summary;
 }
 
+/** 与 Pi 判定「不可重试」的额度词表对齐：这类错误重试无益，只有换模型才有意义。 */
+const TERMINAL_MODEL_QUOTA_ERROR_PATTERN = new RegExp(
+  [
+    "usage[_ ]limit",
+    "GoUsageLimitError",
+    "FreeUsageLimitError",
+    "insufficient_quota",
+    "out of budget",
+    "available balance",
+    "quota exceeded",
+    "billing",
+    "subscription_sharing_usage_limit_exceeded",
+  ].join("|"),
+  "i",
+);
+
+/** 判断 provider 错误是否为确定性的额度/用量耗尽，而非可重试的瞬时限流或过载。 */
+export function isTerminalModelQuotaError(errorMessage: string | undefined): boolean {
+  return typeof errorMessage === "string" && TERMINAL_MODEL_QUOTA_ERROR_PATTERN.test(errorMessage);
+}
+
 /** 单个候选的认证等待上限；超时即视为该候选失败，继续尝试下一个。 */
 export const IMPLEMENTATION_MODEL_AUTH_TIMEOUT_MS = 2_000;
 

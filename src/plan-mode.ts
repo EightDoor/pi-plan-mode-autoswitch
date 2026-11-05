@@ -3,6 +3,7 @@ import { watch } from "node:fs";
 import { basename, dirname } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type {
+  AgentBeforeSettleEvent,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
@@ -34,6 +35,7 @@ import {
 import {
   implementationModelFailureSummary,
   isImplementationModelAuthTimeoutError,
+  isTerminalModelQuotaError,
   withImplementationModelAuthTimeout,
 } from "./implementation-models.js";
 import {
@@ -80,7 +82,6 @@ import {
   configuredPlanModeToggleShortcut,
   configuredThinkingLevel,
   type ImplementationPlanRetention,
-  type PlanModeFixedThinkingLevel,
   type PlanModeSettings,
   type PlanModeSettingsPatch,
   planModeSettingsPath,
@@ -810,6 +811,77 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
   });
 
+  /**
+   * Plan 阶段的运行时额度降级：当前选中模型耗尽额度时，切到 planModel 链上的下一个候选，
+   * 从模型上下文省略这次失败响应并让同一个请求继续一次；链尾或切换失败都保留原错误。
+   * 必须挂在 agent_before_settle 而不是 turn_end：错误回合的 turn_end 不采信 continue，
+   * 只有 settle 边界能保证追加一次模型请求。
+   */
+  pi.on("agent_before_settle", async (event, ctx) => {
+    if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
+    if (event.outcome !== "error") return;
+    const candidates = state.activePlanModelCandidates;
+    if (!candidates || candidates.length === 0) return;
+    const failure = findTrailingQuotaFailure(event.context);
+    if (!failure) return;
+    const current = ctx.model;
+    if (!current) return;
+    // 只有「当前选中的模型就是刚才失败的那个」才降级；手工切到链外的模型保持不动。
+    if (failure.message.provider !== current.provider || failure.message.model !== current.id) return;
+    const currentIndex = candidates.findIndex(
+      (candidate) => candidate.provider === current.provider && candidate.modelId === current.id,
+    );
+    if (currentIndex < 0) return;
+    // 省略失败响应后末尾必须留下可继续的上下文，否则 Pi 会拒绝这次 continuation。
+    if (!contextCanContinueAfterOmitting(event.context, failure.entryId)) return;
+    const remaining = candidates.slice(currentIndex + 1);
+    if (remaining.length === 0) {
+      ctx.ui.notify(
+        `Plan runtime model fallback has no candidate after ${terminalModelReference(candidates[currentIndex])} exhausted its quota.`,
+        "warning",
+      );
+      return;
+    }
+    const session = ctx.sessionManager;
+    const generationAtStart = workflowGeneration;
+    const menuGenerationAtStart = menuGeneration;
+    const preSwitchThinkingLevel = pi.getThinkingLevel();
+    const stale = () =>
+      currentSession !== session ||
+      workflowGeneration !== generationAtStart ||
+      menuGeneration !== menuGenerationAtStart;
+    const application = await switchToFirstUsableModelCandidate(ctx, remaining, stale, false);
+    if (application.stale || stale()) return;
+    if (!application.applied) {
+      ctx.ui.notify(
+        `Plan runtime model fallback kept the current model ${terminalModelReference(candidates[currentIndex])} because: ${implementationModelFailureSummary(application.failures)}`,
+        "warning",
+      );
+      return;
+    }
+    // 认证与 setModel 期间用户可能手工换模型：当前模型不是我们切到的那个候选时丢弃结果，不覆盖也不续跑。
+    if (ctx.model?.provider !== application.applied.provider || ctx.model.id !== application.applied.modelId) {
+      return;
+    }
+    applySwitchedCandidateThinking(
+      ctx,
+      application.applied,
+      application.setModelRan,
+      preSwitchThinkingLevel,
+      "Plan runtime model fallback",
+    );
+    const detail =
+      application.failures.length > 0 ? ` because: ${implementationModelFailureSummary(application.failures)}` : "";
+    ctx.ui.notify(
+      `Plan quota fallback: ${terminalModelReference(candidates[currentIndex])} → ${terminalModelReference(application.applied)}${detail}.`,
+      "info",
+    );
+    return {
+      entries: [...event.entries, { type: "context_edit", targetId: failure.entryId, replacement: null }],
+      continue: true,
+    };
+  });
+
   pi.on("agent_end", async (event, ctx) => {
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
 
@@ -907,6 +979,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         savedPlan: undefined,
         activeImplementation: undefined,
         pendingImplementationRuntime: undefined,
+        activePlanModelCandidates: snapshotPlanModelCandidates(),
         selectedToolNames: candidate.selectedToolNames,
         selectedToolKeys: candidate.selectedToolKeys,
       };
@@ -961,6 +1034,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       savedPlan: undefined,
       activeImplementation: undefined,
       pendingImplementationRuntime: undefined,
+      activePlanModelCandidates: undefined,
       workflowToolPolicy: undefined,
       manualThinkingLevel: undefined,
     };
@@ -1117,6 +1191,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       savedPlan: { plan, source },
       activeImplementation: undefined,
       pendingImplementationRuntime: undefined,
+      activePlanModelCandidates: undefined,
       workflowToolPolicy: undefined,
       manualThinkingLevel: undefined,
     };
@@ -1268,6 +1343,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       awaitingAction: false,
       savedPlan: undefined,
       pendingImplementationRuntime: undefined,
+      activePlanModelCandidates: undefined,
       activeImplementation: usesConversationHistory
         ? undefined
         : {
@@ -1956,66 +2032,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         currentSession !== session ||
         workflowGeneration !== generationAtStart ||
         menuGeneration !== menuGenerationAtStart;
-      const failures: string[] = [];
-      let appliedTarget: ImplementationModelOverride | undefined;
-      let setModelRan = false;
-      // 不再套内层 try/catch：切换块内的异常直接交给外层 catch，统一发一条 warning，
+      // 切换块内的异常直接交给外层 catch，统一发一条 warning，
       // 避免恢复 thinkingLevel 失败时静默把会话留在错误等级上。
-      for (const target of candidates) {
-        if (stale()) return;
-        // Settings validation does not reject control characters; sanitize before any notification.
-        const targetReference = terminalModelReference(target);
-        const current = ctx.model;
-        // 目标已经是当前模型：该候选视为成功，无需重复切换。
-        if (current && current.provider === target.provider && current.id === target.modelId) {
-          appliedTarget = target;
-          break;
-        }
-        let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
-        try {
-          model = ctx.modelRegistry.find(target.provider, target.modelId);
-        } catch (error: unknown) {
-          failures.push(`${targetReference} could not be resolved: ${terminalErrorDetail(error)}`);
-          continue;
-        }
-        if (!model) {
-          failures.push(`${targetReference} is unavailable`);
-          continue;
-        }
-        // 认证探测只为给候选加 2 秒上限：只有超时才按失败处理并继续下一个。
-        // 解析失败（ok:false 或抛错）不作为拦截依据，交给 pi.setModel 按「凭证是否已配置」判定，
-        // 否则一次瞬时解析故障会让本该生效的候选被跳过。
-        // 恢复/回滚（targetOverride）整体跳过探测：它只有刚生效过的模型一个候选，超时被跳过
-        // 会把会话留在切换后的模型上，而该模型的认证几秒前刚刚成功解析过。
-        if (!targetOverride) {
-          try {
-            await withImplementationModelAuthTimeout(() => ctx.modelRegistry.getApiKeyAndHeaders(model));
-          } catch (error: unknown) {
-            if (stale()) return;
-            if (isImplementationModelAuthTimeoutError(error)) {
-              failures.push(`${targetReference} could not be authenticated: ${terminalErrorDetail(error)}`);
-              continue;
-            }
-          }
-          if (stale()) return;
-        }
-        let applied = false;
-        try {
-          applied = await pi.setModel(model);
-        } catch (error: unknown) {
-          if (stale()) return;
-          failures.push(`${targetReference} failed: ${terminalErrorDetail(error)}`);
-          continue;
-        }
-        if (stale()) return;
-        if (!applied) {
-          failures.push(`${targetReference} was not applied`);
-          continue;
-        }
-        appliedTarget = target;
-        setModelRan = true;
-        break;
-      }
+      // 恢复/回滚（targetOverride）整体跳过认证探测：它只有刚生效过的模型一个候选，
+      // 超时被跳过会把会话留在切换后的模型上，而该模型的认证几秒前刚刚成功解析过。
+      const application = await switchToFirstUsableModelCandidate(ctx, candidates, stale, Boolean(targetOverride));
+      if (application.stale) return;
+      const { applied: appliedTarget, setModelRan, failures } = application;
       if (stale()) return;
       if (appliedTarget) {
         if (setModelRan && failures.length > 0) {
@@ -2026,26 +2049,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         }
         // 候选显式等级优先于原等级；无显式等级时若 setModel 真的切换过则恢复原等级，
         // 已匹配当前模型且无显式等级则保持现状。
-        const desired = appliedTarget.thinkingLevel;
-        if (desired) {
-          try {
-            pi.setThinkingLevel(desired);
-          } catch (error: unknown) {
-            ctx.ui.notify(
-              `Auto model switch (${direction}) could not set thinking level ${desired}: ${terminalErrorDetail(error)}`,
-              "warning",
-            );
-          }
-          const effective = pi.getThinkingLevel();
-          if (effective !== desired) {
-            ctx.ui.notify(
-              `Auto model switch (${direction}) requested thinking level ${desired} but Pi is using ${effective}.`,
-              "warning",
-            );
-          }
-        } else if (setModelRan && pi.getThinkingLevel() !== preSwitchThinkingLevel) {
-          pi.setThinkingLevel(preSwitchThinkingLevel);
-        }
+        applySwitchedCandidateThinking(
+          ctx,
+          appliedTarget,
+          setModelRan,
+          preSwitchThinkingLevel,
+          `Auto model switch (${direction})`,
+        );
       } else {
         ctx.ui.notify(
           `Auto model switch (${direction}) kept the current model because: ${implementationModelFailureSummary(failures)}`,
@@ -2060,6 +2070,150 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         // Never propagate a notification failure.
       }
     }
+  }
+
+  interface ModelCandidateSwitchResult {
+    /** 首个真正生效的候选；整条链都失败时为 undefined。 */
+    applied?: ImplementationModelOverride;
+    /** pi.setModel 是否真的执行并返回 true。 */
+    setModelRan: boolean;
+    /** 按候选顺序累积的有界失败原因。 */
+    failures: string[];
+    /** 等待期间会话或工作流失效：调用方必须丢弃结果，且不得再通知。 */
+    stale: boolean;
+  }
+
+  /**
+   * 按声明顺序尝试候选，返回首个真正生效的一个；解析失败、认证超时、setModel 拒绝都前进到下一个候选。
+   * 认证探测只在超时时拦截候选，确定性认证失败仍交给 pi.setModel 判定。
+   */
+  async function switchToFirstUsableModelCandidate(
+    ctx: ExtensionContext,
+    candidates: readonly ImplementationModelOverride[],
+    isStale: () => boolean,
+    skipAuthProbe: boolean,
+  ): Promise<ModelCandidateSwitchResult> {
+    const failures: string[] = [];
+    for (const target of candidates) {
+      if (isStale()) return { setModelRan: false, failures, stale: true };
+      // Settings validation does not reject control characters; sanitize before any notification.
+      const targetReference = terminalModelReference(target);
+      const current = ctx.model;
+      // 目标已经是当前模型：该候选视为成功，无需重复切换。
+      if (current && current.provider === target.provider && current.id === target.modelId) {
+        return { applied: target, setModelRan: false, failures, stale: false };
+      }
+      let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+      try {
+        model = ctx.modelRegistry.find(target.provider, target.modelId);
+      } catch (error: unknown) {
+        failures.push(`${targetReference} could not be resolved: ${terminalErrorDetail(error)}`);
+        continue;
+      }
+      if (!model) {
+        failures.push(`${targetReference} is unavailable`);
+        continue;
+      }
+      // 认证探测只为给候选加 2 秒上限：只有超时才按失败处理并继续下一个。
+      // 解析失败（ok:false 或抛错）不作为拦截依据，交给 pi.setModel 按「凭证是否已配置」判定，
+      // 否则一次瞬时解析故障会让本该生效的候选被跳过。
+      if (!skipAuthProbe) {
+        const modelBeforeAuth = ctx.model;
+        try {
+          await withImplementationModelAuthTimeout(() => ctx.modelRegistry.getApiKeyAndHeaders(model));
+        } catch (error: unknown) {
+          if (isStale()) return { setModelRan: false, failures, stale: true };
+          if (isImplementationModelAuthTimeoutError(error)) {
+            failures.push(`${targetReference} could not be authenticated: ${terminalErrorDetail(error)}`);
+            continue;
+          }
+        }
+        if (isStale()) return { setModelRan: false, failures, stale: true };
+        // 认证探测最长 2 秒：期间用户可能手工换模型，此时放弃本候选，避免覆盖用户的选择。
+        if (ctx.model?.provider !== modelBeforeAuth?.provider || ctx.model?.id !== modelBeforeAuth?.id) {
+          return { setModelRan: false, failures, stale: true };
+        }
+      }
+      let applied = false;
+      try {
+        applied = await pi.setModel(model);
+      } catch (error: unknown) {
+        if (isStale()) return { setModelRan: false, failures, stale: true };
+        failures.push(`${targetReference} failed: ${terminalErrorDetail(error)}`);
+        continue;
+      }
+      if (isStale()) return { setModelRan: false, failures, stale: true };
+      if (!applied) {
+        failures.push(`${targetReference} was not applied`);
+        continue;
+      }
+      return { applied: target, setModelRan: true, failures, stale: false };
+    }
+    return { setModelRan: false, failures, stale: false };
+  }
+
+  /** 应用成功候选绑定的思考等级；候选没有绑定等级时，只有真的切换过模型才恢复切换前的等级。 */
+  function applySwitchedCandidateThinking(
+    ctx: ExtensionContext,
+    applied: ImplementationModelOverride,
+    setModelRan: boolean,
+    preSwitchThinkingLevel: ReturnType<ExtensionAPI["getThinkingLevel"]>,
+    label: string,
+  ) {
+    const desired = applied.thinkingLevel;
+    if (desired) {
+      try {
+        pi.setThinkingLevel(desired);
+      } catch (error: unknown) {
+        ctx.ui.notify(`${label} could not set thinking level ${desired}: ${terminalErrorDetail(error)}`, "warning");
+      }
+      const effective = pi.getThinkingLevel();
+      if (effective !== desired) {
+        ctx.ui.notify(`${label} requested thinking level ${desired} but Pi is using ${effective}.`, "warning");
+      }
+    } else if (setModelRan && pi.getThinkingLevel() !== preSwitchThinkingLevel) {
+      pi.setThinkingLevel(preSwitchThinkingLevel);
+    }
+  }
+
+  /** Plan 激活时快照 planModel 链；活动期间修改设置不影响本次运行时降级的目标顺序。 */
+  function snapshotPlanModelCandidates(): ImplementationModelOverride[] | undefined {
+    if (!configuredAutoSwitchModel(settings)) return undefined;
+    const candidates = configuredAutoSwitchModelTargets(settings, "plan");
+    return candidates.length > 0 ? candidates : undefined;
+  }
+
+  /**
+   * 定位本次 run 末尾那条额度耗尽的 assistant 响应及其条目 id。
+   * 只认「最后一条模型可见消息」，避免把历史里更早的失败响应当作当前失败。
+   */
+  function findTrailingQuotaFailure(context: AgentBeforeSettleEvent["context"]) {
+    const message = context.contextMessages.at(-1);
+    if (!message) return undefined;
+    if (message.role !== "assistant" || message.stopReason !== "error") return undefined;
+    if (!isTerminalModelQuotaError(message.errorMessage)) return undefined;
+    for (let index = context.contextEntries.length - 1; index >= 0; index -= 1) {
+      const projected = context.contextEntries[index];
+      const source = projected.sourceEntry;
+      if (source.type !== "message" || source.message.role !== "assistant") continue;
+      // 末尾失败响应若已被别的处理器省略，交回正常流程，避免重复接管。
+      if (source.message.stopReason !== "error" || !isTerminalModelQuotaError(source.message.errorMessage)) {
+        return undefined;
+      }
+      if (!projected.messages.includes(message)) return undefined;
+      return { message, entryId: source.id };
+    }
+    return undefined;
+  }
+
+  /** 省略指定条目后，上下文是否仍满足 Pi 对 continuation 的要求：末尾不是 assistant，且存在非 system 消息。 */
+  function contextCanContinueAfterOmitting(context: AgentBeforeSettleEvent["context"], entryId: string) {
+    const remaining = context.contextEntries
+      .filter((entry) => entry.sourceEntry.id !== entryId)
+      .flatMap((entry) => entry.messages);
+    if (!remaining.some((message) => message.role !== "system")) return false;
+    const finalRole = remaining.at(-1)?.role;
+    return finalRole !== undefined && finalRole !== "assistant";
   }
 
   function safeGetActiveTools() {
@@ -2115,6 +2269,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         pendingWorkflowToolPolicy = undefined;
       }
       if (policyChanged) persistState();
+      // 老会话恢复时可能没有候选链快照；用当前设置补齐，否则 resume 后运行时降级会静默失效。
+      if (state.enabled && !state.activePlanModelCandidates) {
+        const snapshot = snapshotPlanModelCandidates();
+        if (snapshot) {
+          state = { ...state, activePlanModelCandidates: snapshot };
+          persistState();
+        }
+      }
       if (state.enabled) applyPlanThinkingLevel();
       else if (wasEnabled) releaseWorkflowOwner();
       return true;
