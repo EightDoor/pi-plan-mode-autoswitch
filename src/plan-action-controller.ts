@@ -46,6 +46,8 @@ interface PlanActionControllerOptions {
   stay(ctx: ExtensionContext): void;
   exitReady(ctx: ExtensionContext): void | Promise<void>;
   clearSaved(ctx: ExtensionContext): void | Promise<void>;
+  /** 当前方案相对上一版本的差异；没有可比版本时为 undefined。 */
+  resolveChanges(ctx: ExtensionContext): { summary: string; content: string } | undefined;
 }
 
 export function createPlanActionController(options: PlanActionControllerOptions) {
@@ -132,6 +134,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         save: () => options.save(ctx),
         stay: () => options.stay(ctx),
         exit: () => options.exitReady(ctx),
+        changes: options.resolveChanges(ctx),
       });
     },
     async showReady(ctx: ExtensionContext) {
@@ -151,6 +154,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         save: () => options.save(ctx),
         stay: () => undefined,
         exit: () => options.exitReady(ctx),
+        changes: options.resolveChanges(ctx),
       });
     },
   };

@@ -78,6 +78,8 @@ export interface PlanModeState {
   previousThinkingLevel?: PlanModeFixedThinkingLevel;
   appliedThinkingLevel?: PlanModeFixedThinkingLevel;
   manualThinkingLevel?: PlanModeFixedThinkingLevel;
+  /** 当前 Plan 流程的唯一标识；同一会话里的不同规划轮次靠它区分。 */
+  workflowId?: string;
 }
 
 type SessionEntry = {
@@ -133,7 +135,15 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     previousThinkingLevel: enabled ? fixedThinkingLevel(entry.data.previousThinkingLevel) : undefined,
     appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
     manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
+    workflowId: normalizeWorkflowId(entry.data.workflowId),
   };
+}
+
+/** 流程标识只接受非空字符串；缺失时按旧会话的启用翻转推导流程。 */
+function normalizeWorkflowId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizeWorkflowToolPolicy(value: unknown): PlanModeWorkflowToolPolicy | undefined {

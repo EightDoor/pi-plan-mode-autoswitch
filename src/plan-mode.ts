@@ -58,6 +58,7 @@ import {
   reconcileModeContract,
 } from "./mode-contract.js";
 import { createPlanActionController, type FreshImplementationTiming } from "./plan-action-controller.js";
+import { createPlanDiffCache, planChangesSummary } from "./plan-diff.js";
 import { createPlanExportController } from "./plan-export-controller.js";
 import {
   clearPlanModeUi,
@@ -170,6 +171,7 @@ interface PlanModeDependencies {
 // activation path cannot bypass the same atomic transition by crossing module-owned state.
 export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDependencies = {}) {
   const workflowMutex = new WorkflowMutex(pi);
+  const planDiffCache = createPlanDiffCache();
   let workflowOwner: WorkflowMutexOwner | undefined;
   let currentSession: object | undefined;
   let currentSessionContext: ExtensionContext | undefined;
@@ -246,6 +248,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     clearSaved: async (ctx) => {
       if (await exitPlanMode(ctx)) ctx.ui.notify("Saved plan cleared.", "info");
     },
+    resolveChanges: (ctx) => resolvePlanChanges(ctx),
   });
 
   pi.registerTool({
@@ -329,6 +332,13 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       }
       if (command === "show") {
         showStoredPlan(pi, ctx, state);
+        return;
+      }
+      if (command === "diff") {
+        if (!ctx.hasUI) {
+          throw new Error("/plan diff requires TUI or RPC mode and is unavailable here.");
+        }
+        await showPlanChanges(ctx);
         return;
       }
       if (command === "finalize") {
@@ -982,6 +992,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         activePlanModelCandidates: snapshotPlanModelCandidates(),
         selectedToolNames: candidate.selectedToolNames,
         selectedToolKeys: candidate.selectedToolKeys,
+        // 每次启动都是新的规划轮次：唯一标识随状态持久化，方案对比据此区分轮次。
+        // 用 UUID 而不是时间戳，避免同一毫秒内的两次启动（固定时钟）被并成一轮。
+        workflowId: randomUUID(),
       };
       beginWorkflowToolPolicy();
       applyPlanThinkingLevel();
@@ -1522,6 +1535,29 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       clear: async () => {
         if (await exitPlanMode(ctx)) ctx.ui.notify("Active implementation plan cleared.", "info");
       },
+    });
+  }
+
+  /** 只读展示方案差异：不发消息、不写文件，也不进模型上下文。 */
+  async function showPlanChanges(ctx: ExtensionContext) {
+    const resolution = planDiffCache.resolve(state, ctx.sessionManager.getBranch(), STATE_ENTRY_TYPE);
+    if (resolution.kind === "no-plan") {
+      ctx.ui.notify("No completed plan is available to compare.", "info");
+      return;
+    }
+    if (resolution.kind === "no-baseline") {
+      ctx.ui.notify("No earlier plan version is available to compare.", "info");
+      return;
+    }
+    const lifecycle = captureMenuLifecycle();
+    const ui = await loadInteractiveUi();
+    if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
+    await ui.showPlanChangesView(ctx, {
+      title: "Plan changes",
+      summary: planChangesSummary(resolution.changes),
+      content: resolution.changes.content,
+      signal: lifecycle.signal,
+      isCurrent: lifecycle.isCurrent,
     });
   }
 
@@ -2369,7 +2405,15 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function updateUi(ctx: ExtensionContext) {
-    updatePlanModeUi(ctx, state, formatToolSummary);
+    const changes = state.enabled && state.latestPlan ? resolvePlanChanges(ctx) : undefined;
+    updatePlanModeUi(ctx, state, formatToolSummary, changes?.summary);
+  }
+
+  /** 当前方案相对上一版本的差异；没有可比版本时为 undefined。 */
+  function resolvePlanChanges(ctx: ExtensionContext) {
+    const resolution = planDiffCache.resolve(state, ctx.sessionManager.getBranch(), STATE_ENTRY_TYPE);
+    if (resolution.kind !== "ready") return undefined;
+    return { summary: planChangesSummary(resolution.changes), content: resolution.changes.content };
   }
 
   function clearUi(ctx: ExtensionContext) {

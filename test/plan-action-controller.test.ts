@@ -30,6 +30,7 @@ test("stale Plan actions do not load interactive UI", async () => {
     stay: () => undefined,
     exitReady: () => undefined,
     clearSaved: () => undefined,
+    resolveChanges: () => undefined,
   });
   const context = createMockContext({ hasUI: true });
 
@@ -90,6 +91,7 @@ test("only ready-plan fresh actions survive normal menu disposal for deferred ha
     stay: () => undefined,
     exitReady: () => undefined,
     clearSaved: () => undefined,
+    resolveChanges: () => undefined,
   });
   const context = createMockContext({
     hasUI: true,
@@ -108,6 +110,60 @@ test("only ready-plan fresh actions survive normal menu disposal for deferred ha
   );
 });
 
+test("both ready-plan menus receive the resolved plan changes", async () => {
+  const received: Record<string, unknown>[] = [];
+  const changes = { summary: "Changes vs the previous version: +1 / -1 lines.", content: "@@ -1 +1 @@" };
+  const controller = createPlanActionController({
+    loadInteractiveUi: async () =>
+      ({
+        showPlanModeMenu: async (_ctx: unknown, options: Record<string, unknown>) => {
+          received.push({ menu: "current", options });
+        },
+        showReadyPlanMenu: async (_ctx: unknown, options: Record<string, unknown>) => {
+          received.push({ menu: "ready", options });
+        },
+      }) as never,
+    getState: () => ({
+      enabled: true,
+      awaitingAction: true,
+      latestPlan: "# Plan",
+      latestPlanSource: "plan_mode_complete",
+    }),
+    captureLifecycle: () => ({ signal: new AbortController().signal, isCurrent: () => true }),
+    statusText: () => "ready",
+    getThinkingLevel: () => "medium",
+    getSettings: () => ({ thinkingLevel: "inherit" }),
+    implementationOutcome: () => "",
+    getExportDestination: () => ({ configuredPath: "plan.md", resolvedPath: "/tmp/plan.md" }),
+    show: () => undefined,
+    finalize: () => undefined,
+    implementHere: () => undefined,
+    implementFresh: () => undefined,
+    exportPlan: async () => false,
+    settings: async () => false,
+    save: () => undefined,
+    stay: () => undefined,
+    exitReady: () => undefined,
+    clearSaved: () => undefined,
+    resolveChanges: () => changes,
+  });
+  const context = createMockContext({
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    modelRegistry: { getAvailable: () => [] },
+  });
+
+  await controller.showCurrent(context.ctx);
+  await controller.showReady(context.ctx);
+
+  assert.deepEqual(
+    received.map((entry) => [entry.menu, (entry.options as { changes?: unknown }).changes]),
+    [
+      ["current", changes],
+      ["ready", changes],
+    ],
+  );
+});
 test("saved-plan fresh actions use persistent defaults and fall back from missing models", async () => {
   const target = { provider: "target-provider", id: "target-model" };
   const scenarios = [
@@ -164,6 +220,7 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
       stay: () => undefined,
       exitReady: () => undefined,
       clearSaved: () => undefined,
+      resolveChanges: () => undefined,
     });
     const context = createMockContext({
       hasUI: true,
@@ -268,6 +325,7 @@ test("saved-plan fresh actions resolve the configured chain to its usable candid
       stay: () => undefined,
       exitReady: () => undefined,
       clearSaved: () => undefined,
+      resolveChanges: () => undefined,
     });
     const context = createMockContext({
       hasUI: true,

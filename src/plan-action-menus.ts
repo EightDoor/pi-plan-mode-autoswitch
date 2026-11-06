@@ -45,10 +45,12 @@ interface PlanMenuOptions extends MenuLifecycle {
   save(): void | Promise<void>;
   stay(): void;
   exit(): void | Promise<void>;
+  /** 上一版本的方案差异；没有可比版本时为 undefined。 */
+  changes?: { summary: string; content: string };
 }
 
 export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuOptions) {
-  type Screen = "main" | "fresh" | "models" | "thinking" | "export";
+  type Screen = "main" | "changes" | "fresh" | "models" | "thinking" | "export";
   type Action =
     | "show"
     | "finalize"
@@ -75,6 +77,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
         lines: [
           options.statusText,
           ...(options.hasReadyPlan ? [...IMPLEMENTATION_CONTEXT_LINES, options.implementationOutcome()] : []),
+          ...(options.hasReadyPlan && options.changes ? [options.changes.summary] : []),
         ],
         items: options.hasReadyPlan
           ? [
@@ -92,6 +95,16 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
                 to: "fresh",
               },
               { id: "export", label: "Export plan…", to: "export" },
+              ...(options.changes
+                ? [
+                    {
+                      id: "changes",
+                      label: "View plan changes",
+                      description: "Compare the plan with the previous version.",
+                      to: "changes" as const,
+                    },
+                  ]
+                : []),
               { id: "save", label: "Save for later", action: "save" },
               { id: "stay", label: "Stay in Plan mode", action: "stay" },
               { id: "exit", label: "Discard plan and exit", action: "exit" },
@@ -102,6 +115,14 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
               { id: "exit", label: "Exit Plan mode", action: "exit" },
             ],
         hint: "close",
+      }),
+      changes: () => ({
+        kind: "review",
+        title: "Plan changes",
+        lines: options.changes ? [options.changes.summary] : [],
+        content: options.changes?.content ?? "",
+        format: { kind: "diff" },
+        hint: "back",
       }),
       fresh: freshFlow.settingsScreen,
       models: freshFlow.modelScreen,
@@ -167,10 +188,12 @@ interface ReadyPlanMenuOptions extends MenuLifecycle {
   save(): void | Promise<void>;
   stay(): void;
   exit(): void | Promise<void>;
+  /** 上一版本的方案差异；没有可比版本时为 undefined。 */
+  changes?: { summary: string; content: string };
 }
 
 export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPlanMenuOptions) {
-  type Screen = "ready" | "fresh" | "models" | "thinking" | "export";
+  type Screen = "ready" | "changes" | "fresh" | "models" | "thinking" | "export";
   type Action =
     | "implement-here"
     | "select-model"
@@ -192,7 +215,11 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
       ready: () => ({
         kind: "actions",
         title: "Proposed plan ready. What next?",
-        lines: [...IMPLEMENTATION_CONTEXT_LINES, options.implementationOutcome()],
+        lines: [
+          ...IMPLEMENTATION_CONTEXT_LINES,
+          options.implementationOutcome(),
+          ...(options.changes ? [options.changes.summary] : []),
+        ],
         items: [
           {
             id: "implement-here",
@@ -207,11 +234,29 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
             to: "fresh",
           },
           { id: "export", label: "Export plan…", to: "export" },
+          ...(options.changes
+            ? [
+                {
+                  id: "changes",
+                  label: "View plan changes",
+                  description: "Compare the plan with the previous version.",
+                  to: "changes" as const,
+                },
+              ]
+            : []),
           { id: "save", label: "Save for later", action: "save" },
           { id: "stay", label: "Stay in Plan mode", action: "stay" },
           { id: "exit", label: "Discard plan and exit", action: "exit" },
         ],
         hint: "close",
+      }),
+      changes: () => ({
+        kind: "review",
+        title: "Plan changes",
+        lines: options.changes ? [options.changes.summary] : [],
+        content: options.changes?.content ?? "",
+        format: { kind: "diff" },
+        hint: "back",
       }),
       fresh: freshFlow.settingsScreen,
       models: freshFlow.modelScreen,
