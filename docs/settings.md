@@ -57,8 +57,8 @@ The shortcut is disabled when `toggleShortcut` is omitted.
   "toggleShortcut": "<your_key>"
 }
 ```
-`planModel` and `normalModel` also accept a single model object instead of an array; the array form configures ordered fallbacks.
-`planModel` and `normalModel` are non-empty arrays of model objects in array form. Each entry accepts an optional `thinkingLevel` (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`); the next Plan-boundary or fresh-implementation switch applies the level of the candidate that succeeds, and a fallback candidate uses its own level.
+`planModel` and `normalModel` are non-empty arrays of model objects; the array order is the fallback order. A single model object is not accepted: it invalidates the whole settings file, which then falls back to the defaults with a warning.
+Each entry accepts an optional `thinkingLevel` (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`); the next Plan-boundary or fresh-implementation switch applies the level of the candidate that succeeds, and a fallback candidate uses its own level.
 ### Plan helper tools
 
 Plan helper schemas are stable from extension registration onward, and Plan mode does not call `setActiveTools()`.
