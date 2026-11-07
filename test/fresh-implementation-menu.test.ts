@@ -123,6 +123,46 @@ test("fresh settings use the supplied plan thinking level on older Pi contexts",
   });
 });
 
+test("an explicit Same as plan thinking choice uses the planning level", async () => {
+  let selectedRuntime: unknown;
+  let freshVisits = 0;
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    thinkingLevel: "medium",
+    modelRegistry: { getAvailable: () => AVAILABLE_MODELS },
+    select: async (title: string) => {
+      if (title.startsWith("Proposed plan ready")) return "Start fresh and implement";
+      if (title.startsWith("Fresh implementation settings")) {
+        freshVisits += 1;
+        return freshVisits === 1 ? "Thinking level" : "Start fresh implementation";
+      }
+      if (title.startsWith("Implementation thinking level")) return "Same as plan";
+      return undefined;
+    },
+  });
+  await showReadyPlanMenu(
+    context.ctx,
+    menuOptions({
+      planThinkingLevel: "medium",
+      implementationDefaults: {
+        model: { provider: "provider-two", modelId: "model-two", thinkingLevel: "high" },
+      },
+      implementFresh: (runtime: unknown) => {
+        selectedRuntime = runtime;
+      },
+    }),
+  );
+
+  // 明确选择继承规划等级时，它要压过候选自带的等级。
+  assert.deepEqual(selectedRuntime, {
+    model: { provider: "provider-two", modelId: "model-two", thinkingLevel: "high" },
+    thinkingLevel: "medium",
+    inheritedThinkingLevel: "medium",
+  });
+});
+
 test("fresh settings prioritize start and show the plan runtime defaults", async () => {
   let screen = 0;
   let settingsScreen = "";

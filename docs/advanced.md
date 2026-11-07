@@ -28,6 +28,8 @@ Pi lists hidden transition messages in `/tree`; Plan mode rejects those internal
 
 Stable schemas preserve a cacheable prefix but cannot guarantee a cache hit, because provider serialization, cache lifetime, minimum prefix length, implementation details, and session affinity stay outside this extension's control.
 
+**Cache boundary.** The extension does not rewrite a prefix it has already shown a model in the flow it controls end to end: a fresh implementation session receives the approved plan once as an ordinary user message and keeps it, so the target model's later requests keep the same prefix. The remaining boundaries do change the prefix, by design: the guaranteed-plan policies add and remove their hidden plan block when their cleanup boundary is reached; a same-session implementation drops the superseded plan versions' completion calls and results so only the approved plan stays; an explicit `/plan exit` drops the active plan and its reinjection but leaves text already delivered as an ordinary message in the conversation history; and switching models, starting a new session, changing reasoning parameters, or compacting all replace the prefix. Reuse after such a boundary depends on the provider.
+
 ## Workflow coexistence
 
 Plan mode can be installed on its own and keeps its standalone behavior when no other protocol participant exists.
@@ -43,6 +45,7 @@ A rejected start with selected tools does not save its draft selection.
 
 A restored active Plan state acquires the lock before it restores restricted tools, thinking level, status, or model hooks.
 If the session is busy on restore, Plan mode stays inactive, leaves persisted history and active tools untouched, and asks you to reload or start again explicitly after the other workflow finishes.
+When a restore fails because the Plan helper tools are unavailable, Plan mode stays inactive, releases the workflow lock it holds, restores the thinking level it applied, and clears the status, so the next start is not blocked by its own lock.
 Cancelling the planning session during a fresh-session implementation preflight keeps the source Plan and its ownership.
 A successful session replacement relies on the source session's shutdown to clean up and release; ordinary active implementation in the destination does not take the Plan mutex.
 

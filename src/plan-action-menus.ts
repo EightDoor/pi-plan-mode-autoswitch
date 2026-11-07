@@ -30,6 +30,9 @@ const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = 
   max: "Maximum reasoning",
 };
 
+/** Thinking 选择里的「Same as plan」条目 id：表示明确继承规划会话的等级。 */
+const SAME_AS_PLAN_THINKING = "same-as-plan";
+
 interface PlanMenuOptions extends MenuLifecycle {
   statusText: string;
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
@@ -347,10 +350,9 @@ function createFreshImplementationFlow(
   // 未手工改选时整条链按顺序交给实施流程：首个可用候选作主模型，其余作后备。
   let selectedChain = configuredAvailableIndex < 0 ? [] : configuredChain.slice(configuredAvailableIndex);
   // 一次性 thinking 选择：undefined 表示「未显式改选」，让 apply 路径回退到候选绑定等级。
-  // 显示用的「默认 level」（候选绑定或规划等级）由 selectedThinkingLevelForDisplay 单独计算。
-  // 一次性 thinking 选择：仅当 controller 判定整条链无绑定等级时才会从 runtime 默认继承规划等级；
-  // 链上任一候选绑定了等级时这里是 undefined，让 apply 路径用实际成功候选的等级。
-  let selectedThinkingLevel = implementationDefaults?.thinkingLevel;
+  // "same-as-plan" 表示用户明确选择继承规划等级，它要压过候选自带的等级。
+  let selectedThinkingLevel: PlanModeFixedThinkingLevel | typeof SAME_AS_PLAN_THINKING | undefined =
+    implementationDefaults?.thinkingLevel;
   // 当前生效的模型候选（未手工改选 = 重解析后仍可用的首选；改选过 = 用户选中的模型）。
   const activeConfiguredModel = (): ImplementationModelOverride | undefined =>
     selectedModelUsesDefault
@@ -385,9 +387,13 @@ function createFreshImplementationFlow(
           id: "implementation-thinking",
           label: "Thinking level",
           description:
-            selectedThinkingLevel ??
-            activeConfiguredModel()?.thinkingLevel ??
-            (planThinkingLevel ? `${planThinkingLevel} · same as plan` : "Same as plan"),
+            selectedThinkingLevel === SAME_AS_PLAN_THINKING
+              ? planThinkingLevel
+                ? `${planThinkingLevel} · same as plan`
+                : "Same as plan"
+              : (selectedThinkingLevel ??
+                activeConfiguredModel()?.thinkingLevel ??
+                (planThinkingLevel ? `${planThinkingLevel} · same as plan` : "Same as plan")),
           to: "thinking" as const,
         },
       ],
@@ -440,7 +446,10 @@ function createFreshImplementationFlow(
       unavailableDefaultActive = false;
     },
     selectThinking(itemId: string) {
-      selectedThinkingLevel = IMPLEMENTATION_THINKING_LEVELS.find((level) => level === itemId);
+      selectedThinkingLevel =
+        itemId === SAME_AS_PLAN_THINKING
+          ? SAME_AS_PLAN_THINKING
+          : IMPLEMENTATION_THINKING_LEVELS.find((level) => level === itemId);
     },
     start(signal: AbortSignal) {
       if (selectedModelUsesDefault) {
@@ -480,7 +489,15 @@ function createFreshImplementationFlow(
       // 一次性 thinking 仅由用户显式改选产生；继承的规划等级走 inheritedThinkingLevel（最低优先级），
       // 候选绑定等级在 apply 路径按「一次性 > 候选 > 继承」参与裁决，不会被规划等级压掉。
       const inheritedThinkingLevel = implementationDefaults?.inheritedThinkingLevel ?? planThinkingLevel;
-      const thinkingLevel = selectedThinkingLevel;
+      // 明确选择「Same as plan」时用规划等级覆盖候选自带等级；没有可用等级就退回继承通道。
+      const sameAsPlanLevel = planThinkingLevel ?? implementationDefaults?.inheritedThinkingLevel;
+      const thinkingLevel = selectedThinkingLevel === SAME_AS_PLAN_THINKING ? sameAsPlanLevel : selectedThinkingLevel;
+      if (selectedThinkingLevel === SAME_AS_PLAN_THINKING && !sameAsPlanLevel) {
+        ctx.ui.notify(
+          "The planning session has no thinking level to inherit; keeping the configured default.",
+          "warning",
+        );
+      }
       return implementFresh(
         {
           ...(model ? { model: { ...model } } : {}),
