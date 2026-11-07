@@ -262,6 +262,89 @@ test("overlapping transitions serialize so the later switch wins", async () => {
   ]);
 });
 
+test("a Plan prompt is not sent when the workflow is cancelled during the model switch", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings());
+  await startSession(mock, context.ctx);
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    // 卡住切换：期间用户退出 Plan 模式，本次启动作废。
+    await gate;
+    return applied;
+  };
+
+  const entering = mock.commands.get("plan")?.handler("plan a feature", context.ctx) as Promise<unknown>;
+  for (let i = 0; i < 100 && mock.setModels.length === 0; i += 1) await Promise.resolve();
+  assert.equal(mock.setModels.length, 1, "the Plan enter switch should be in flight");
+  const exiting = mock.commands.get("plan")?.handler("exit", context.ctx) as Promise<unknown>;
+  releaseGate();
+  await Promise.all([entering, exiting]);
+
+  assert.deepEqual(mock.sentUserMessages, [], "a cancelled Plan workflow must not send its prompt");
+  assert.deepEqual(mock.setModels.at(-1), { provider: NORMAL_MODEL.provider, id: NORMAL_MODEL.modelId });
+});
+
+test("a Plan prompt is not sent when the session is replaced during the model switch", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings());
+  await startSession(mock, context.ctx);
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    await gate;
+    return applied;
+  };
+
+  const entering = mock.commands.get("plan")?.handler("plan a feature", context.ctx) as Promise<unknown>;
+  for (let i = 0; i < 100 && mock.setModels.length === 0; i += 1) await Promise.resolve();
+  assert.equal(mock.setModels.length, 1, "the Plan enter switch should be in flight");
+  // 等待期间会话被替换：旧会话的提示不能再发出去。
+  const replacement = createMockContext({ mode: "tui", hasUI: true });
+  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, replacement.ctx);
+  releaseGate();
+  await entering;
+
+  assert.deepEqual(mock.sentUserMessages, [], "a replaced session must not receive the Plan prompt");
+});
+
+test("a cancelled implementation releases the workflow lock so Plan mode can start again", async () => {
+  const { mock, context } = createHarness(autoSwitchSettings());
+  await startSession(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  await completePlan(mock, context.ctx);
+
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  const originalSetModel = mock.rawPi.setModel.bind(mock.rawPi);
+  mock.rawPi.setModel = async (model: unknown) => {
+    const applied = await originalSetModel(model);
+    // 卡住实施前的模型切换，等待期间用户退出 Plan 模式。
+    await gate;
+    return applied;
+  };
+
+  const implementing = mock.commands.get("plan")?.handler("implement", context.ctx) as Promise<unknown>;
+  for (let i = 0; i < 100 && mock.setModels.length < 2; i += 1) await Promise.resolve();
+  assert.equal(mock.setModels.length, 2, "the implementation switch should be in flight");
+  const exiting = mock.commands.get("plan")?.handler("exit", context.ctx) as Promise<unknown>;
+  releaseGate();
+  await Promise.all([implementing, exiting]);
+
+  assert.equal(context.statuses.get("plan-mode"), undefined);
+  // 取消实施后锁必须释放：再次启动不应被自己的锁挡住。
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
+});
+
 const FALLBACK_MODEL = { provider: "opencode-go", modelId: "fallback-model" };
 
 function warningMessages(context: ReturnType<typeof createMockContext>) {

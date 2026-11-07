@@ -1000,8 +1000,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       applyPlanThinkingLevel();
       persistState();
       updateUi(ctx);
+      const activationSnapshot = captureWorkflowSnapshot();
       await applyAutoModelSwitch("plan", ctx);
-      return true;
+      // 切换模型期间流程可能被退出或会话替换取代：此时本次启动作废，不再继续。
+      return workflowSnapshotIsCurrent(activationSnapshot);
     } catch (error: unknown) {
       rollbackNewActivation(previousState, ctx);
       throw error;
@@ -1344,6 +1346,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const wasEnabled = state.enabled;
     if (!publishModeContract("normal", ctx)) return;
     advanceWorkflowGeneration();
+    const implementationSnapshot = captureWorkflowSnapshot();
     const retention = configuredImplementationPlanRetention(settings);
     const usesConversationHistory = retention === "clear-on-start";
     readyPresentationIntent = undefined;
@@ -1378,6 +1381,17 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const preImplementModel = ctx.model;
     // 无论活动 Plan 还是 Plan 外已保存方案，进入实施都统一切到 normalModel（未启用时内部直接 no-op）。
     await applyAutoModelSwitch("normal", ctx);
+    // 切换模型期间实施可能被退出、新流程或会话替换取代：此时不发送交接请求。
+    if (!workflowSnapshotIsCurrent(implementationSnapshot)) {
+      // 取消实施后要释放本次实施持有的锁，否则下一次启动会被自己的锁挡住。
+      if (workflowOwner === implementationSnapshot.owner) releaseWorkflowOwner();
+      try {
+        ctx.ui.notify("Plan implementation was cancelled because the workflow changed.", "warning");
+      } catch {
+        // 会话可能已被替换，通知失败无需处理。
+      }
+      return;
+    }
     const handoff = usesConversationHistory
       ? wasEnabled
         ? formatHistoryImplementationPrompt()
@@ -1597,6 +1611,22 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     workflowGeneration += 1;
     pendingWorkflowToolPolicy = undefined;
     finalizationRequest.reset();
+  }
+
+  interface WorkflowSnapshot {
+    generation: number;
+    menuGeneration: number;
+    owner: WorkflowMutexOwner | undefined;
+  }
+
+  /** 记录一次模式转换的归属：流程代次、会话代次与互斥锁持有者。 */
+  function captureWorkflowSnapshot(): WorkflowSnapshot {
+    return { generation: workflowGeneration, menuGeneration, owner: workflowOwner };
+  }
+
+  /** 转换等待期间被新流程或会话替换后，快照即失效。 */
+  function workflowSnapshotIsCurrent(snapshot: WorkflowSnapshot): boolean {
+    return snapshot.generation === workflowGeneration && snapshot.menuGeneration === menuGeneration;
   }
 
   function finalizationRunOutcome(messages: unknown): FinalizationRunOutcome {
@@ -2269,10 +2299,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (candidate.enabled && !workflowMutex.isOwner(workflowOwner)) {
       const owner = workflowMutex.acquire();
       if (!owner) {
+        restoreThinkingLevel();
         state = { enabled: false, awaitingAction: false };
         workflowAllowedToolNames = undefined;
         pendingWorkflowToolPolicy = undefined;
         reportRestoredWorkflowBusy(ctx);
+        updateUi(ctx);
         return false;
       }
       workflowOwner = owner;
@@ -2283,14 +2315,15 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         try {
           assertPlanModeHelperToolsAvailable(safeGetActiveTools());
         } catch {
+          // 恢复失败：Plan 已停用，必须释放本扩展持有的互斥锁并清理界面，
+          // 否则下一次启动会被自己的锁挡住。
+          restoreThinkingLevel();
           state = { enabled: false, awaitingAction: false };
           workflowAllowedToolNames = undefined;
           pendingWorkflowToolPolicy = undefined;
-          if (workflowOwner !== previousOwner) {
-            workflowMutex.release(workflowOwner);
-            workflowOwner = previousOwner;
-          }
+          releaseWorkflowOwner();
           reportRestoredHelpersUnavailable(ctx);
+          updateUi(ctx);
           return false;
         }
       }
