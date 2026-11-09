@@ -124,7 +124,7 @@ The settings screen has a searchable model list that snapshots the session model
 Pi 0.80.6-0.82.1 do not expose the session model scope to extensions, so those versions list all currently available models.
 One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
 The model row starts from the **Plan exit model** (`normalModel` candidate chain, effective only when `autoSwitchModel` is enabled); when it is unset or the whole chain is unavailable the row says **same as plan** and falls back to the current session model.
-The thinking row always starts from the planning session's current level and says **same as plan**; both rows are one-shot menu choices and never write back to the persisted configuration.
+The thinking row starts from the thinking level bound to the chosen candidate, or the planning session's current level when that candidate has none; picking **same as plan** in the thinking list uses the planning session's level and overrides the candidate's bound level. Both rows are one-shot menu choices and never write back to the persisted configuration.
 The fixed thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 Going back keeps the draft inside that menu, while closing and reopening the menu restores the initial values above.
 If the configured preferred model is outside the current scope or unavailable, the row uses the first usable candidate after it and only reports a fallback when the whole chain is unavailable; the stored preference is never deleted.
@@ -221,6 +221,7 @@ Export is an explicit user-requested file mutation, and the resulting file can b
 Wait for Pi's run to settle before starting, exiting, saving, exporting a ready plan, implementing, or using another state-changing menu action or configured shortcut.
 Busy transitions leave state unchanged and report a warning in TUI/RPC or an error in print/JSON mode.
 An ordinary follow-up or `/plan finalize` can still run while Plan mode is active because neither changes its mode contract.
+A transition that waits for a model switch and is cancelled meanwhile — by exiting Plan mode, a new workflow, or a session replacement — sends no request: the pending prompt or implementation handoff is dropped instead of running under the new mode.
 
 `show`, `save`, `export`, and `implement` require an applicable stored plan; `finalize` requires active Plan mode.
 Cancellation and failed implementation preflight leave the stored plan intact.

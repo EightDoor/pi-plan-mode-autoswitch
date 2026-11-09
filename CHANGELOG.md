@@ -1,5 +1,14 @@
 # pi-plan-mode-autoswitch
 
+## 0.2.6
+
+### Patch Changes
+
+- Cancel a Plan transition whose workflow was replaced while it waited for the automatic model switch. Exiting Plan mode, starting another workflow, or replacing the session during that wait no longer sends the pending planning prompt or the implementation handoff, and no longer overwrites the new workflow's model. A cancelled implementation also releases the workflow lock it held, so the next `/plan start` is not blocked by its own lock.
+- A restore that fails because the Plan helper tools are unavailable now releases the workflow lock, restores the thinking level it applied, and clears the status and widget instead of leaving Plan mode half inactive.
+- Treat **Same as plan** in the fresh-implementation thinking list as an explicit choice: it now uses the planning session's level and outranks the level bound to the candidate model. Leaving the row untouched still follows the candidate's bound level.
+- Documentation: describe the thinking row's real default, separate an authentication timeout from a definite authentication failure in the model switch, and state the cache boundary — which flows keep an already shown prefix and which intentionally rewrite it.
+
 ## Unreleased
 
 ### Minor Changes

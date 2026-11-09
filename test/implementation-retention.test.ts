@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
+import { formatTransferredPlanPrompt } from "../src/fresh-implementation.js";
+import { createModeContractMessage } from "../src/mode-contract.js";
 import planMode from "../src/plan-mode.js";
 import type { ImplementationPlanRetention } from "../src/settings.js";
 import { restorePlanModeState } from "../src/state.js";
@@ -445,4 +447,27 @@ test("manual exit clears every retention policy before its automatic boundary", 
     assert.equal(latestState(mock).activeImplementation, undefined);
     assert.equal(context.statuses.get("plan-mode"), undefined);
   }
+});
+test("a fresh implementation session keeps the transferred plan in later contexts", async () => {
+  const { role: _role, timestamp: _timestamp, ...contract } = createModeContractMessage("normal", 10);
+  const branch = [{ type: "custom_message", ...contract }];
+  const sessionManager = { getBranch: () => branch, getEntries: () => branch };
+  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  planMode(mock.pi);
+  const context = createMockContext({ sessionManager });
+  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  const contextHook = mock.events.get("context")?.[0];
+  assert.ok(contextHook);
+
+  // 新会话实施：目标会话只收到转移提示，它属于普通历史，后续请求不得改写前缀。
+  const transferred = { role: "user", content: formatTransferredPlanPrompt(PLAN, true) };
+  const messages = [transferred, { role: "assistant", content: "Working on it." }];
+  const first = (await contextHook({ messages }, context.ctx)) as { messages: unknown[] };
+  const second = (await contextHook({ messages: first.messages }, context.ctx)) as { messages: unknown[] };
+
+  assert.deepEqual(first.messages, second.messages, "repeated requests must keep the same context");
+  assert.ok(
+    first.messages.some((message) => (message as { content?: unknown }).content === transferred.content),
+    "the transferred plan must stay in the target session context",
+  );
 });

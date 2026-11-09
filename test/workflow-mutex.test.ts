@@ -352,6 +352,27 @@ test("busy menu, selected-tool, shortcut, and active-implementation starts stay 
   assert.deepEqual([...activeContext.statuses], statusSnapshot);
 });
 
+test("a failed restore releases the workflow lock so Plan mode can start again", async () => {
+  const branch: unknown[] = [];
+  const sessionManager = { getBranch: () => branch, getEntries: () => branch };
+  const mock = createMockPi({ activeTools: ["read", "write"] });
+  planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+  const context = createMockContext({ mode: "tui", hasUI: true, sessionManager });
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+
+  // Pi 停用辅助工具后发生树导航：恢复失败，Plan 必须停用并释放自己持有的锁。
+  mock.rawPi.setActiveTools(["read", "write"]);
+  branch.push({ type: "custom", customType: "plan-mode-state", data: { enabled: true, awaitingAction: false } });
+  await mock.events.get("session_tree")?.[0]?.({}, context.ctx);
+  assert.match(context.notifications.at(-1)?.message ?? "", /helper tools are unavailable/i);
+  assert.equal(context.statuses.get("plan-mode"), undefined);
+
+  mock.rawPi.setActiveTools(["read", "write", ...PLAN_HELPERS]);
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
+});
+
 test("Plan releases only after exit, save, export, implementation handoff, and shutdown cleanup", async () => {
   const exportRoot = await mkdtemp(join(tmpdir(), "pi-plan-mutex-release-"));
   try {
